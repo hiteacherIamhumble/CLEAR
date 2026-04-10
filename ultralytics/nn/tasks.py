@@ -86,7 +86,6 @@ from ultralytics.utils.loss import (
     v8ClassificationLoss,
     v8DetectionLoss,
     v8OBBLoss,
-    v8PoseLoss,
     v8SegmentationLoss,
 )
 from ultralytics.utils.ops import make_divisible
