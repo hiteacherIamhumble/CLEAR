@@ -24,15 +24,14 @@ class PositionBandPostProcessor:
     """Per-y-band calibrated BEV post-processing.
 
     Runtime behavior is intentionally simple:
-      1) map the predicted player position keypoint to a vertical image band,
-      2) read the learned threshold ratio assigned to that band,
-      3) apply ``base_score_threshold * threshold_ratio`` to bbox confidence,
-      4) optionally require a minimum keypoint score only for detections that
+    1) map the predicted player position keypoint to a vertical image band,
+    2) read the learned threshold ratio assigned to that band,
+    3) apply ``base_score_threshold * threshold_ratio`` to bbox confidence,
+    4) optionally require a minimum keypoint score only for detections that
          were rescued by the relaxed local threshold.
 
-    This keeps the original inference logic intact for high-confidence
-    detections while allowing validation-calibrated bands to become stricter or
-    more relaxed than the global threshold.
+    This keeps the original inference logic intact for high-confidence detections while allowing validation-calibrated
+    bands to become stricter or more relaxed than the global threshold.
     """
 
     def __init__(self, stats: dict[str, Any]) -> None:
@@ -80,8 +79,12 @@ class PositionBandPostProcessor:
                 stage_counts_eval={"input": 0, "band_conf": 0, "rescue_kpt": 0, "final": 0},
                 stage_thresholds={
                     "base_score_threshold": float(self.base_score_threshold),
-                    "band_low_ratio": float(min(self.band_ratio_lookup.values(), default=self.fallback_threshold_ratio)),
-                    "band_high_ratio": float(max(self.band_ratio_lookup.values(), default=self.fallback_threshold_ratio)),
+                    "band_low_ratio": float(
+                        min(self.band_ratio_lookup.values(), default=self.fallback_threshold_ratio)
+                    ),
+                    "band_high_ratio": float(
+                        max(self.band_ratio_lookup.values(), default=self.fallback_threshold_ratio)
+                    ),
                     "num_bands": float(self.y_bands),
                     "fallback_threshold_ratio": float(self.fallback_threshold_ratio),
                     "rescue_keypoint_ratio": float(self.rescue_keypoint_ratio),
@@ -115,7 +118,9 @@ class PositionBandPostProcessor:
         rescue_kpt_mask = keep.copy()
         rescue_kpt_count = int(np.count_nonzero(keep))
 
-        eval_mask = conf_scores >= self.base_score_threshold if self.base_score_threshold > 0 else np.ones(n, dtype=bool)
+        eval_mask = (
+            conf_scores >= self.base_score_threshold if self.base_score_threshold > 0 else np.ones(n, dtype=bool)
+        )
         eval_input = int(np.count_nonzero(eval_mask))
         eval_band_conf = int(np.count_nonzero(band_conf_mask & eval_mask))
         eval_rescue_kpt = int(np.count_nonzero(rescue_kpt_mask & eval_mask))
@@ -129,7 +134,7 @@ class PositionBandPostProcessor:
                 "input": int(n),
                 "band_conf": band_conf_count,
                 "rescue_kpt": rescue_kpt_count,
-                "final": int(len(kept_indices)),
+                "final": len(kept_indices),
             },
             stage_counts_eval={
                 "input": eval_input,

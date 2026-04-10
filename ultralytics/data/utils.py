@@ -238,26 +238,24 @@ def verify_image_label(args: tuple) -> list:
                     assert np.isfinite(lb).all(), "labels contain NaN or Inf values"
                     assert lb[:, 0].min() >= -0.01, f"negative class labels {lb[:, 0][lb[:, 0] < -0.01]}"
                     if not allow_oob_keypoints:
-                        assert (
-                            box_xywh[:, 2:4] > 0
-                        ).all(), f"invalid bbox width/height {box_xywh[:, 2:4][box_xywh[:, 2:4] <= 0]}"
+                        assert (box_xywh[:, 2:4] > 0).all(), (
+                            f"invalid bbox width/height {box_xywh[:, 2:4][box_xywh[:, 2:4] <= 0]}"
+                        )
 
                     # When allow_oob_keypoints=True, allow out-of-bounds bbox/keypoint coordinates and zero-area boxes.
 
                     # This supports partially visible players whose pelvis/projection or bbox center may lie outside [0, 1].
                     if not allow_oob_keypoints:
-                        assert (
-                            box_xywh.max() <= 1.01
-                        ), f"non-normalized or out of bounds bbox coordinates {box_xywh[box_xywh > 1.01]}"
-                        assert (
-                            box_xywh.min() >= -0.01
-                        ), f"negative bbox coordinate {box_xywh[box_xywh < -0.01]}"
-                        assert (
-                            kpt_points.max() <= 1.01
-                        ), f"non-normalized or out of bounds keypoint coordinates {kpt_points[kpt_points > 1.01]}"
-                        assert (
-                            kpt_points.min() >= -0.01
-                        ), f"negative keypoint coordinate {kpt_points[kpt_points < -0.01]}"
+                        assert box_xywh.max() <= 1.01, (
+                            f"non-normalized or out of bounds bbox coordinates {box_xywh[box_xywh > 1.01]}"
+                        )
+                        assert box_xywh.min() >= -0.01, f"negative bbox coordinate {box_xywh[box_xywh < -0.01]}"
+                        assert kpt_points.max() <= 1.01, (
+                            f"non-normalized or out of bounds keypoint coordinates {kpt_points[kpt_points > 1.01]}"
+                        )
+                        assert kpt_points.min() >= -0.01, (
+                            f"negative keypoint coordinate {kpt_points[kpt_points < -0.01]}"
+                        )
                 else:
                     assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
                     points = lb[:, 1:]
