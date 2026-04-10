@@ -1,0 +1,36 @@
+# Ultralytics pose dataset config for player localization with 2 keypoints.
+# Task: bbox + pelvis + pelvis_ground (ground projection of pelvis)
+#
+# Expected layout:
+#   path/
+#   ├── images/
+#   │   ├── train
+#   │   ├── val
+#   │   └── test
+#   └── labels/
+#       ├── train
+#       ├── val
+#       └── test
+#
+# Label line format:
+# class cx cy w h p_x p_y p_v g_x g_y g_v
+
+path: /root/autodl-tmp/ultralytics/my_database
+train: images/train
+val: images/val
+test: images/test
+
+kpt_shape: [2, 3]
+
+allow_oob_keypoints: true
+allow_oob_labels: true
+flip_idx: [0, 1]
+sigmas: [0.089, 0.089]
+
+names:
+  0: person
+
+kpt_names:
+  0:
+    - pelvis
+    - pelvis_ground

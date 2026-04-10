@@ -62,6 +62,7 @@ class PosePredictor(DetectionPredictor):
         # Extract keypoints from prediction and reshape according to model's keypoint shape
         pred_kpts = pred[:, 6:].view(pred.shape[0], *self.model.kpt_shape)
         # Scale keypoints coordinates to match the original image dimensions
-        pred_kpts = ops.scale_coords(img.shape[2:], pred_kpts, orig_img.shape)
+        allow_oob = bool(getattr(self.args, "allow_oob_labels", False))
+        pred_kpts = ops.scale_coords(img.shape[2:], pred_kpts, orig_img.shape, clip=not allow_oob)
         result.update(keypoints=pred_kpts)
         return result

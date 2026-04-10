@@ -503,6 +503,7 @@ class Mosaic(BaseMixTransform):
         self.border = (-imgsz // 2, -imgsz // 2)  # width, height
         self.n = n
         self.buffer_enabled = self.dataset.cache != "ram"
+        self.allow_oob_labels = bool(self.dataset.data.get("allow_oob_labels", self.dataset.data.get("allow_oob_keypoints", False)))
 
     def get_indexes(self):
         """Return a list of random indexes from the dataset for mosaic augmentation.
@@ -807,9 +808,10 @@ class Mosaic(BaseMixTransform):
             "instances": Instances.concatenate(instances, axis=0),
             "mosaic_border": self.border,
         }
-        final_labels["instances"].clip(imgsz, imgsz)
-        good = final_labels["instances"].remove_zero_area_boxes()
-        final_labels["cls"] = final_labels["cls"][good]
+        if not self.allow_oob_labels:
+            final_labels["instances"].clip(imgsz, imgsz)
+            good = final_labels["instances"].remove_zero_area_boxes()
+            final_labels["cls"] = final_labels["cls"][good]
         if "texts" in mosaic_labels[0]:
             final_labels["texts"] = mosaic_labels[0]["texts"]
         return final_labels
@@ -1029,6 +1031,7 @@ class RandomPerspective:
         perspective: float = 0.0,
         border: tuple[int, int] = (0, 0),
         pre_transform=None,
+        allow_oob_labels: bool = False,
     ):
         """Initialize RandomPerspective object with transformation parameters.
 
@@ -1052,6 +1055,7 @@ class RandomPerspective:
         self.perspective = perspective
         self.border = border  # mosaic border
         self.pre_transform = pre_transform
+        self.allow_oob_labels = bool(allow_oob_labels)
 
     def affine_transform(self, img: np.ndarray, border: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, float]:
         """Apply a sequence of affine transformations centered around the image center.
@@ -1217,7 +1221,8 @@ class RandomPerspective:
         xy = xy @ M.T  # transform
         xy = xy[:, :2] / xy[:, 2:3]  # perspective rescale or affine
         out_mask = (xy[:, 0] < 0) | (xy[:, 1] < 0) | (xy[:, 0] > self.size[0]) | (xy[:, 1] > self.size[1])
-        visible[out_mask] = 0
+        if not self.allow_oob_labels:
+            visible[out_mask] = 0
         return np.concatenate([xy, visible], axis=-1).reshape(n, nkpt, 3)
 
     def __call__(self, labels: dict[str, Any]) -> dict[str, Any]:
@@ -1284,17 +1289,20 @@ class RandomPerspective:
         if keypoints is not None:
             keypoints = self.apply_keypoints(keypoints, M)
         new_instances = Instances(bboxes, segments, keypoints, bbox_format="xyxy", normalized=False)
-        # Clip
-        new_instances.clip(*self.size)
+        if not self.allow_oob_labels:
+            # Clip and filter degenerate boxes for standard normalized-detection tasks.
+            new_instances.clip(*self.size)
 
-        # Filter instances
-        instances.scale(scale_w=scale, scale_h=scale, bbox_only=True)
-        # Make the bboxes have the same scale with new_bboxes
-        i = self.box_candidates(
-            box1=instances.bboxes.T, box2=new_instances.bboxes.T, area_thr=0.01 if len(segments) else 0.10
-        )
-        labels["instances"] = new_instances[i]
-        labels["cls"] = cls[i]
+            instances.scale(scale_w=scale, scale_h=scale, bbox_only=True)
+            # Make the bboxes have the same scale with new_bboxes
+            i = self.box_candidates(
+                box1=instances.bboxes.T, box2=new_instances.bboxes.T, area_thr=0.01 if len(segments) else 0.10
+            )
+            labels["instances"] = new_instances[i]
+            labels["cls"] = cls[i]
+        else:
+            labels["instances"] = new_instances
+            labels["cls"] = cls
         labels["img"] = img
         labels["resized_shape"] = img.shape[:2]
         return labels
@@ -2419,6 +2427,7 @@ def v8_transforms(dataset, imgsz: int, hyp: IterableSimpleNamespace, stretch: bo
         shear=hyp.shear,
         perspective=hyp.perspective,
         pre_transform=None if stretch else LetterBox(new_shape=(imgsz, imgsz)),
+        allow_oob_labels=bool(dataset.data.get("allow_oob_labels", dataset.data.get("allow_oob_keypoints", False))),
     )
 
     pre_transform = Compose([mosaic, affine])

@@ -118,5 +118,6 @@ class DetectionPredictor(BasePredictor):
         Returns:
             (Results): Results object containing the original image, image path, class names, and scaled bounding boxes.
         """
-        pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape)
+        allow_oob = bool(getattr(self.args, "allow_oob_labels", False))
+        pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], orig_img.shape, clip=not allow_oob)
         return Results(orig_img, path=img_path, names=self.model.names, boxes=pred[:, :6])

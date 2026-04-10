@@ -20,7 +20,20 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "OBB", "Classify", "Detect", "Pose", "RTDETRDecoder", "Segment", "YOLOEDetect", "YOLOESegment", "v10Detect"
+__all__ = (
+    "OBB",
+    "Classify",
+    "Detect",
+    "Pose",
+    "Pose26",
+    "Pose26MLPRefine",
+    "Pose26Refine",
+    "RTDETRDecoder",
+    "Segment",
+    "YOLOEDetect",
+    "YOLOESegment",
+    "v10Detect",
+)
 
 
 class Detect(nn.Module):
@@ -767,6 +780,327 @@ class Pose26(Pose):
             y[:, 0::ndim] = (y[:, 0::ndim] + self.anchors[0]) * self.strides
             y[:, 1::ndim] = (y[:, 1::ndim] + self.anchors[1]) * self.strides
             return y
+
+
+class Pose26Refine(Pose26):
+    """YOLO26 Pose head with a lightweight RoI query refinement stage for keypoints."""
+
+    def __init__(self, nc: int = 80, kpt_shape: tuple = (17, 3), reg_max=16, end2end=False, ch: tuple = ()):
+        """Initialize Pose26Refine head."""
+        super().__init__(nc, kpt_shape, reg_max, end2end, ch)
+        self.refine_enabled = True
+        self.refine_topk_train = 768
+        self.refine_topk_eval = 300
+        self.refine_roi_size = 7
+        self.refine_expand_x = 0.10
+        self.refine_expand_top = 0.10
+        self.refine_expand_bottom = 1.20
+        self.refine_hidden = max(min(ch[0], 256), 128)
+        self.refine_heads = max(self.refine_hidden // 64, 1)
+
+        self.refine_proj = nn.Conv2d(ch[0], self.refine_hidden, 1)
+        self.refine_query = nn.Parameter(torch.zeros(max(self.kpt_shape[0], 2), self.refine_hidden))
+        self.refine_attn = nn.MultiheadAttention(
+            embed_dim=self.refine_hidden, num_heads=self.refine_heads, dropout=0.0, batch_first=True
+        )
+        self.refine_norm1 = nn.LayerNorm(self.refine_hidden)
+        self.refine_ffn = nn.Sequential(
+            nn.Linear(self.refine_hidden, self.refine_hidden * 2),
+            nn.GELU(),
+            nn.Linear(self.refine_hidden * 2, self.refine_hidden),
+        )
+        self.refine_norm2 = nn.LayerNorm(self.refine_hidden)
+        self.refine_pelvis = nn.Linear(self.refine_hidden, 2)
+        self.refine_delta = nn.Linear(self.refine_hidden, 2)
+        self._init_refiner()
+
+    def _init_refiner(self) -> None:
+        """Initialize refinement layers conservatively for stable finetuning."""
+        nn.init.normal_(self.refine_query, std=0.02)
+        nn.init.zeros_(self.refine_pelvis.weight)
+        nn.init.zeros_(self.refine_pelvis.bias)
+        nn.init.zeros_(self.refine_delta.weight)
+        nn.init.zeros_(self.refine_delta.bias)
+
+    def _decode_boxes_image(
+        self, pred_boxes: torch.Tensor, feats: list[torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Decode predicted boxes to image coordinates."""
+        anchor_points, stride_tensor = make_anchors(feats, self.stride, 0.5)
+        dbox = self.decode_bboxes(self.dfl(pred_boxes), anchor_points.transpose(0, 1).unsqueeze(0))
+        dbox = dbox * stride_tensor[:, 0].view(1, 1, -1)
+        return dbox.permute(0, 2, 1), anchor_points, stride_tensor  # [bs, na, 4], [na, 2], [na, 1]
+
+    def _decode_kpts_image(
+        self, pred_kpts: torch.Tensor, anchor_points: torch.Tensor, stride_tensor: torch.Tensor
+    ) -> torch.Tensor:
+        """Decode keypoints to image coordinates."""
+        bs = pred_kpts.shape[0]
+        y = pred_kpts.permute(0, 2, 1).contiguous().view(bs, -1, *self.kpt_shape).clone()
+        ndim = self.kpt_shape[1]
+        if ndim == 3:
+            y[..., 2] = y[..., 2].sigmoid()
+        y[..., 0] = (y[..., 0] + anchor_points[:, 0].view(1, -1, 1)) * stride_tensor[:, 0].view(1, -1, 1)
+        y[..., 1] = (y[..., 1] + anchor_points[:, 1].view(1, -1, 1)) * stride_tensor[:, 0].view(1, -1, 1)
+        return y
+
+    def _build_refine_rois(
+        self, boxes_img: torch.Tensor, idx: torch.Tensor, feat_h: int, feat_w: int, stride0: float
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build asymmetric RoIs for refinement from selected anchor predictions."""
+        bs, k = idx.shape
+        selected_boxes = boxes_img.gather(1, idx.unsqueeze(-1).expand(-1, -1, 4))  # [bs, k, 4]
+        x1, y1, x2, y2 = selected_boxes.unbind(dim=-1)
+        w = (x2 - x1).clamp(min=1.0)
+        h = (y2 - y1).clamp(min=1.0)
+
+        x1 = x1 - self.refine_expand_x * w
+        x2 = x2 + self.refine_expand_x * w
+        y1 = y1 - self.refine_expand_top * h
+        y2 = y2 + self.refine_expand_bottom * h
+
+        scale = 1.0 / max(stride0, 1e-6)
+        x1 = (x1 * scale).clamp(0, max(feat_w - 1, 0))
+        x2 = (x2 * scale).clamp(0, max(feat_w - 1, 0))
+        y1 = (y1 * scale).clamp(0, max(feat_h - 1, 0))
+        y2 = (y2 * scale).clamp(0, max(feat_h - 1, 0))
+
+        roi_boxes = torch.stack((x1, y1, x2, y2), dim=-1).view(bs * k, 4)
+        batch_idx = torch.arange(bs, device=boxes_img.device, dtype=boxes_img.dtype).view(bs, 1).repeat(1, k).view(-1, 1)
+        rois = torch.cat((batch_idx, roi_boxes), dim=1)  # [bs*k, 5]
+        return rois, selected_boxes
+
+    def _roi_align(self, feat: torch.Tensor, rois: torch.Tensor) -> torch.Tensor:
+        """Apply RoIAlign on feature maps."""
+        import torchvision
+
+        return torchvision.ops.roi_align(
+            feat,
+            rois,
+            output_size=(self.refine_roi_size, self.refine_roi_size),
+            spatial_scale=1.0,
+            sampling_ratio=-1,
+            aligned=True,
+        )
+
+    def _run_refiner(
+        self, feat0: torch.Tensor, boxes_img: torch.Tensor, coarse_kpts_img: torch.Tensor, scores: torch.Tensor, topk: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run query-based keypoint refinement on top-scoring anchors."""
+        bs, na = scores.shape
+        k = min(topk, na)
+        idx = scores.topk(k, dim=1).indices  # [bs, k]
+
+        proj = self.refine_proj(feat0)
+        rois, selected_boxes = self._build_refine_rois(
+            boxes_img, idx, feat_h=proj.shape[-2], feat_w=proj.shape[-1], stride0=float(self.stride[0])
+        )
+        roi_feat = self._roi_align(proj, rois)  # [bs*k, c, r, r]
+        tokens = roi_feat.flatten(2).transpose(1, 2)  # [bs*k, r*r, c]
+
+        n_rois = tokens.shape[0]
+        n_queries = max(self.kpt_shape[0], 2)
+        q = self.refine_query[:n_queries].unsqueeze(0).expand(n_rois, -1, -1)
+        attn_out, _ = self.refine_attn(q, tokens, tokens)
+        q = self.refine_norm1(q + attn_out)
+        q = self.refine_norm2(q + self.refine_ffn(q))
+
+        gather_idx = idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], self.kpt_shape[1])
+        coarse_sel = coarse_kpts_img.gather(1, gather_idx).reshape(n_rois, self.kpt_shape[0], self.kpt_shape[1])
+        box_sel = selected_boxes.reshape(n_rois, 4)
+        box_wh = (box_sel[:, 2:4] - box_sel[:, 0:2]).clamp(min=1.0)
+
+        refined = coarse_sel.clone()
+        pelvis = coarse_sel[:, 0, :2] + self.refine_pelvis(q[:, 0, :]) * box_wh
+        refined[:, 0, :2] = pelvis
+        if self.kpt_shape[0] > 1:
+            delta_raw = self.refine_delta(q[:, 1, :])
+            delta = torch.cat((delta_raw[:, 0:1] * box_wh[:, 0:1], F.softplus(delta_raw[:, 1:2]) * box_wh[:, 1:2]), dim=1)
+            refined[:, 1, :2] = pelvis + delta
+
+        return idx, refined.view(bs, k, self.kpt_shape[0], self.kpt_shape[1])
+
+    def forward_head(
+        self,
+        x: list[torch.Tensor],
+        box_head: torch.nn.Module,
+        cls_head: torch.nn.Module,
+        pose_head: torch.nn.Module,
+        kpts_head: torch.nn.Module,
+        kpts_sigma_head: torch.nn.Module,
+    ) -> dict[str, torch.Tensor]:
+        """Forward pass with optional RoI query keypoint refinement."""
+        preds = super().forward_head(x, box_head, cls_head, pose_head, kpts_head, kpts_sigma_head)
+        if self.export or pose_head is None or "scores" not in preds or "kpts" not in preds:
+            return preds
+
+        topk = self.refine_topk_train if self.training else min(self.refine_topk_eval, self.max_det)
+        if topk <= 0:
+            return preds
+
+        with torch.no_grad():
+            scores = preds["scores"].detach().sigmoid().amax(dim=1)
+
+        boxes_img, anchor_points, stride_tensor = self._decode_boxes_image(preds["boxes"], preds["feats"])
+        coarse_kpts_img = self._decode_kpts_image(preds["kpts"], anchor_points, stride_tensor)
+        refine_idx, refine_kpts = self._run_refiner(x[0], boxes_img, coarse_kpts_img, scores, topk)
+        preds["refine_idx"] = refine_idx
+        preds["refine_kpts"] = refine_kpts
+        return preds
+
+    def _inference(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Decode predictions and replace top-scoring keypoints with refined outputs when available."""
+        preds = super()._inference(x)
+        refine_idx = x.get("refine_idx")
+        refine_kpts = x.get("refine_kpts")
+        if refine_idx is None or refine_kpts is None or refine_idx.numel() == 0:
+            return preds
+
+        bs, k = refine_idx.shape
+        kpt_start = 4 + self.nc
+        kpt_end = kpt_start + self.nk
+        refined_flat = refine_kpts[..., : self.kpt_shape[1]].reshape(bs, k, self.nk).permute(0, 2, 1).contiguous()
+        scatter_idx = refine_idx.unsqueeze(1).expand(-1, self.nk, -1)
+        kpt_tensor = preds[:, kpt_start:kpt_end, :].scatter(2, scatter_idx, refined_flat)
+        return torch.cat((preds[:, :kpt_start, :], kpt_tensor, preds[:, kpt_end:, :]), dim=1)
+
+
+class Pose26MLPRefine(Pose26):
+    """YOLO26 Pose head with lightweight implicit MLP keypoint refinement on P3 features."""
+
+    def __init__(self, nc: int = 80, kpt_shape: tuple = (17, 3), reg_max=16, end2end=False, ch: tuple = ()): 
+        """Initialize Pose26MLPRefine head."""
+        super().__init__(nc, kpt_shape, reg_max, end2end, ch)
+        self.refine_enabled = True
+        self.mlp_refine_enabled = True
+        self.refine_topk_train = 768
+        self.refine_topk_eval = 300
+        self.refine_hidden = 128
+
+        in_dim = ch[0] + 2  # local P3 feature + relative grid coordinate
+        self.refine_mlp = nn.Sequential(
+            nn.Linear(in_dim, self.refine_hidden),
+            nn.GELU(),
+            nn.Linear(self.refine_hidden, self.refine_hidden),
+            nn.GELU(),
+            nn.Linear(self.refine_hidden, 2),
+        )
+        self._init_refiner()
+
+    def _init_refiner(self) -> None:
+        """Initialize MLP refiner conservatively for stable finetuning."""
+        nn.init.zeros_(self.refine_mlp[-1].weight)
+        nn.init.zeros_(self.refine_mlp[-1].bias)
+
+    def _decode_kpts_image(
+        self, pred_kpts: torch.Tensor, anchor_points: torch.Tensor, stride_tensor: torch.Tensor
+    ) -> torch.Tensor:
+        """Decode keypoints to image coordinates."""
+        bs = pred_kpts.shape[0]
+        y = pred_kpts.permute(0, 2, 1).contiguous().view(bs, -1, *self.kpt_shape).clone()
+        ndim = self.kpt_shape[1]
+        if ndim == 3:
+            y[..., 2] = y[..., 2].sigmoid()
+        y[..., 0] = (y[..., 0] + anchor_points[:, 0].view(1, -1, 1)) * stride_tensor[:, 0].view(1, -1, 1)
+        y[..., 1] = (y[..., 1] + anchor_points[:, 1].view(1, -1, 1)) * stride_tensor[:, 0].view(1, -1, 1)
+        return y
+
+    def _sample_local_features(self, feat0: torch.Tensor, xy_img: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample local P3 features and per-cell relative coordinates for queried keypoints."""
+        _, _, feat_h, feat_w = feat0.shape
+        stride0 = max(float(self.stride[0]), 1e-6)
+        xy_feat = xy_img / stride0
+
+        if feat_w > 1:
+            grid_x = (xy_feat[..., 0] / (feat_w - 1)) * 2.0 - 1.0
+        else:
+            grid_x = torch.zeros_like(xy_feat[..., 0])
+        if feat_h > 1:
+            grid_y = (xy_feat[..., 1] / (feat_h - 1)) * 2.0 - 1.0
+        else:
+            grid_y = torch.zeros_like(xy_feat[..., 1])
+        grid = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(2)  # [bs, n, 1, 2]
+
+        sampled = F.grid_sample(
+            feat0,
+            grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )  # [bs, c, n, 1]
+        sampled = sampled.squeeze(-1).permute(0, 2, 1).contiguous()  # [bs, n, c]
+
+        delta_coord = (xy_feat - torch.floor(xy_feat)).clamp(0.0, 1.0)  # [bs, n, 2]
+        return sampled, delta_coord
+
+    def _run_refiner(
+        self, feat0: torch.Tensor, coarse_kpts_img: torch.Tensor, scores: torch.Tensor, topk: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run MLP keypoint refinement for top-scoring anchors."""
+        bs, na = scores.shape
+        k = min(topk, na)
+        if k <= 0:
+            empty_idx = torch.zeros((bs, 0), dtype=torch.long, device=scores.device)
+            empty_kpts = coarse_kpts_img.new_zeros((bs, 0, self.kpt_shape[0], self.kpt_shape[1]))
+            return empty_idx, empty_kpts
+
+        idx = scores.topk(k, dim=1).indices  # [bs, k]
+        gather_idx = idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], self.kpt_shape[1])
+        coarse_sel = coarse_kpts_img.gather(1, gather_idx)  # [bs, k, nkpt, ndim]
+        coarse_xy = coarse_sel[..., :2].detach()  # stop-gradient on coarse keypoints
+
+        flat_xy = coarse_xy.reshape(bs, k * self.kpt_shape[0], 2)
+        local_feat, delta_coord = self._sample_local_features(feat0, flat_xy)
+        mlp_input = torch.cat((local_feat, delta_coord), dim=-1)
+        delta_xy = self.refine_mlp(mlp_input).reshape(bs, k, self.kpt_shape[0], 2)
+
+        refined = coarse_sel.clone()
+        refined[..., :2] = coarse_xy + delta_xy
+        return idx, refined
+
+    def forward_head(
+        self,
+        x: list[torch.Tensor],
+        box_head: torch.nn.Module,
+        cls_head: torch.nn.Module,
+        pose_head: torch.nn.Module,
+        kpts_head: torch.nn.Module,
+        kpts_sigma_head: torch.nn.Module,
+    ) -> dict[str, torch.Tensor]:
+        """Forward pass with optional MLP keypoint refinement."""
+        preds = super().forward_head(x, box_head, cls_head, pose_head, kpts_head, kpts_sigma_head)
+        if self.export or pose_head is None or "scores" not in preds or "kpts" not in preds:
+            return preds
+
+        topk = self.refine_topk_train if self.training else min(self.refine_topk_eval, self.max_det)
+        if topk <= 0:
+            return preds
+
+        with torch.no_grad():
+            scores = preds["scores"].detach().sigmoid().amax(dim=1)
+
+        anchor_points, stride_tensor = make_anchors(preds["feats"], self.stride, 0.5)
+        coarse_kpts_img = self._decode_kpts_image(preds["kpts"], anchor_points, stride_tensor)
+        refine_idx, refine_kpts = self._run_refiner(x[0], coarse_kpts_img, scores, topk)
+        preds["refine_idx"] = refine_idx
+        preds["refine_kpts"] = refine_kpts
+        return preds
+
+    def _inference(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Decode predictions and replace top-scoring keypoints with refined outputs when available."""
+        preds = super()._inference(x)
+        refine_idx = x.get("refine_idx")
+        refine_kpts = x.get("refine_kpts")
+        if refine_idx is None or refine_kpts is None or refine_idx.numel() == 0:
+            return preds
+
+        bs, _ = refine_idx.shape
+        kpt_start = 4 + self.nc
+        kpt_end = kpt_start + self.nk
+        refined_flat = refine_kpts[..., : self.kpt_shape[1]].reshape(bs, -1, self.nk).permute(0, 2, 1).contiguous()
+        scatter_idx = refine_idx.unsqueeze(1).expand(-1, self.nk, -1)
+        kpt_tensor = preds[:, kpt_start:kpt_end, :].scatter(2, scatter_idx, refined_flat)
+        return torch.cat((preds[:, :kpt_start, :], kpt_tensor, preds[:, kpt_end:, :]), dim=1)
 
 
 class Classify(nn.Module):

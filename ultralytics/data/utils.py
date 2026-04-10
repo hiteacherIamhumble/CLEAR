@@ -194,7 +194,14 @@ def verify_image(args: tuple) -> tuple:
 
 def verify_image_label(args: tuple) -> list:
     """Verify one image-label pair."""
-    im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls = args
+    # args: (im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls[, allow_oob_keypoints])
+    if len(args) == 8:
+        im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls = args
+        allow_oob_keypoints = False
+    elif len(args) == 9:
+        im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, single_cls, allow_oob_keypoints = args
+    else:
+        raise ValueError(f"verify_image_label expected 8 or 9 args, got {len(args)}")
     # Number (missing, found, empty, corrupt), message, segments, keypoints
     nm, nf, ne, nc, msg, segments, keypoints = 0, 0, 0, 0, "", [], None
     try:
@@ -225,13 +232,38 @@ def verify_image_label(args: tuple) -> list:
             if nl := len(lb):
                 if keypoint:
                     assert lb.shape[1] == (5 + nkpt * ndim), f"labels require {(5 + nkpt * ndim)} columns each"
-                    points = lb[:, 5:].reshape(-1, ndim)[:, :2]
+                    box_xywh = lb[:, 1:5]
+                    kpt_points = lb[:, 5:].reshape(-1, ndim)[:, :2]
+
+                    assert np.isfinite(lb).all(), "labels contain NaN or Inf values"
+                    assert lb[:, 0].min() >= -0.01, f"negative class labels {lb[:, 0][lb[:, 0] < -0.01]}"
+                    if not allow_oob_keypoints:
+                        assert (
+                            box_xywh[:, 2:4] > 0
+                        ).all(), f"invalid bbox width/height {box_xywh[:, 2:4][box_xywh[:, 2:4] <= 0]}"
+
+                    # When allow_oob_keypoints=True, allow out-of-bounds bbox/keypoint coordinates and zero-area boxes.
+
+                    # This supports partially visible players whose pelvis/projection or bbox center may lie outside [0, 1].
+                    if not allow_oob_keypoints:
+                        assert (
+                            box_xywh.max() <= 1.01
+                        ), f"non-normalized or out of bounds bbox coordinates {box_xywh[box_xywh > 1.01]}"
+                        assert (
+                            box_xywh.min() >= -0.01
+                        ), f"negative bbox coordinate {box_xywh[box_xywh < -0.01]}"
+                        assert (
+                            kpt_points.max() <= 1.01
+                        ), f"non-normalized or out of bounds keypoint coordinates {kpt_points[kpt_points > 1.01]}"
+                        assert (
+                            kpt_points.min() >= -0.01
+                        ), f"negative keypoint coordinate {kpt_points[kpt_points < -0.01]}"
                 else:
                     assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
                     points = lb[:, 1:]
-                # Coordinate points check with 1% tolerance
-                assert points.max() <= 1.01, f"non-normalized or out of bounds coordinates {points[points > 1.01]}"
-                assert lb.min() >= -0.01, f"negative class labels or coordinate {lb[lb < -0.01]}"
+                    # Coordinate points check with 1% tolerance
+                    assert points.max() <= 1.01, f"non-normalized or out of bounds coordinates {points[points > 1.01]}"
+                    assert lb.min() >= -0.01, f"negative class labels or coordinate {lb[lb < -0.01]}"
 
                 # All labels
                 max_cls = 0 if single_cls else lb[:, 0].max()  # max label count
@@ -254,7 +286,10 @@ def verify_image_label(args: tuple) -> list:
         if keypoint:
             keypoints = lb[:, 5:].reshape(-1, nkpt, ndim)
             if ndim == 2:
-                kpt_mask = np.where((keypoints[..., 0] < 0) | (keypoints[..., 1] < 0), 0.0, 1.0).astype(np.float32)
+                if allow_oob_keypoints:
+                    kpt_mask = np.ones(keypoints.shape[:2], dtype=np.float32)
+                else:
+                    kpt_mask = np.where((keypoints[..., 0] < 0) | (keypoints[..., 1] < 0), 0.0, 1.0).astype(np.float32)
                 keypoints = np.concatenate([keypoints, kpt_mask[..., None]], axis=-1)  # (nl, nkpt, 3)
         lb = lb[:, :5]
         return im_file, lb, shape, segments, keypoints, nm, nf, ne, nc, msg

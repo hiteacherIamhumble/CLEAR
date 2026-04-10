@@ -23,6 +23,7 @@ __all__ = (
     "LayerNorm2d",
     "MLPBlock",
     "MSDeformAttn",
+    "P3CrossScaleDeformAttn",
     "TransformerBlock",
     "TransformerEncoderLayer",
     "TransformerLayer",
@@ -453,6 +454,69 @@ class LayerNorm2d(nn.Module):
         s = (x - u).pow(2).mean(1, keepdim=True)
         x = (x - u) / torch.sqrt(s + self.eps)
         return self.weight[:, None, None] * x + self.bias[:, None, None]
+
+
+class P3CrossScaleDeformAttn(nn.Module):
+    """Cross-scale deformable attention that enhances only the P3 feature map before the pose head.
+
+    The module consumes `[P3, P4, P5]`, attends from P3 queries into all three scales with sparse deformable sampling,
+    and returns only the enhanced P3 tensor. P4/P5 stay unchanged and can be forwarded directly to the head.
+    """
+
+    def __init__(
+        self,
+        ch: list[int],
+        d_model: int = 256,
+        n_heads: int = 8,
+        n_points: int = 4,
+        ffn_ratio: float = 4.0,
+    ):
+        """Initialize the cross-scale deformable attention block."""
+        super().__init__()
+        if len(ch) != 3:
+            raise ValueError(f"P3CrossScaleDeformAttn expects 3 feature levels [P3, P4, P5], but got {len(ch)}.")
+        if d_model % n_heads != 0:
+            raise ValueError(f"d_model must be divisible by n_heads, but got {d_model} and {n_heads}.")
+
+        self.n_levels = 3
+        self.c_p3 = ch[0]
+        self.input_projs = nn.ModuleList(nn.Conv2d(c, d_model, 1) for c in ch)
+        self.deform_attn = MSDeformAttn(d_model=d_model, n_levels=self.n_levels, n_heads=n_heads, n_points=n_points)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.ffn = MLP(d_model, int(d_model * ffn_ratio), d_model, 2, act=nn.GELU)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.output_proj = nn.Conv2d(d_model, self.c_p3, 1)
+        self.gate = nn.Parameter(torch.zeros(1))
+
+    @staticmethod
+    def _make_reference_points(bs: int, h: int, w: int, n_levels: int, device: torch.device, dtype: torch.dtype):
+        """Build normalized 2D reference points at P3 cell centers for all levels."""
+        ref_y = (torch.arange(h, device=device, dtype=dtype) + 0.5) / h
+        ref_x = (torch.arange(w, device=device, dtype=dtype) + 0.5) / w
+        if TORCH_1_11:
+            grid_y, grid_x = torch.meshgrid(ref_y, ref_x, indexing="ij")
+        else:
+            grid_y, grid_x = torch.meshgrid(ref_y, ref_x)
+        ref = torch.stack((grid_x, grid_y), dim=-1).view(1, h * w, 1, 2)
+        return ref.expand(bs, -1, n_levels, -1)
+
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        """Enhance P3 using deformable cross-scale attention over P3/P4/P5."""
+        p3, p4, p5 = x
+        bs, _, h3, w3 = p3.shape
+
+        feats = [proj(feat) for proj, feat in zip(self.input_projs, (p3, p4, p5))]
+        spatial_shapes = [(feat.shape[2], feat.shape[3]) for feat in feats]
+        query = feats[0].flatten(2).transpose(1, 2).contiguous()
+        value = torch.cat([feat.flatten(2).transpose(1, 2) for feat in feats], dim=1).contiguous()
+        ref_points = self._make_reference_points(bs, h3, w3, self.n_levels, p3.device, query.dtype)
+
+        out = self.deform_attn(query, ref_points, value, spatial_shapes)
+        out = self.norm1(query + out)
+        out = self.norm2(out + self.ffn(out))
+        out = out.transpose(1, 2).reshape(bs, -1, h3, w3).contiguous()
+        out = self.output_proj(out)
+        return p3 + self.gate * out
 
 
 class MSDeformAttn(nn.Module):

@@ -49,6 +49,7 @@ dropout: 0.0 # (float) dropout for classification head (classify only)
 # Val/Test settings ----------------------------------------------------------------------------------------------------
 val: True # (bool) run validation/testing during training
 split: val # (str) dataset split to evaluate: 'val', 'test' or 'train'
+allow_oob_labels: False # (bool) allow out-of-bounds bbox/keypoint coordinates (no clipping in pose/detect scaling)
 save_json: False # (bool) save results to COCO JSON for external evaluation
 conf: # (float, optional) confidence threshold; defaults: predict=0.25, val=0.001
 iou: 0.7 # (float) IoU threshold used for NMS
@@ -105,6 +106,11 @@ dfl: 1.5 # (float) distribution focal loss gain
 pose: 12.0 # (float) pose loss gain (pose tasks)
 kobj: 1.0 # (float) keypoint objectness loss gain (pose tasks)
 rle: 1.0 # (float) rle loss gain (pose tasks)
+kpt1_weight: 1.0 # (float) relative weight for keypoint index 1 in pose/refine losses (2-point tasks)
+refine: 1.0 # (float) keypoint refinement loss gain (pose phase-2 tasks)
+refine_prior: 0.1 # (float) geometric prior gain encouraging pelvis_ground below pelvis
+refine_wing_w: 5.0 # (float) Wing loss width (pixels) for refinement stage
+refine_wing_eps: 1.0 # (float) Wing loss epsilon (pixels) for refinement stage
 angle: 1.0 # (float) oriented angle loss gain (obb tasks)
 nbs: 64 # (int) nominal batch size used for loss normalization
 hsv_h: 0.015 # (float) HSV hue augmentation fraction

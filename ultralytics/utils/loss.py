@@ -320,14 +320,26 @@ class KeypointLoss(nn.Module):
         self.sigmas = sigmas
 
     def forward(
-        self, pred_kpts: torch.Tensor, gt_kpts: torch.Tensor, kpt_mask: torch.Tensor, area: torch.Tensor
+        self,
+        pred_kpts: torch.Tensor,
+        gt_kpts: torch.Tensor,
+        kpt_mask: torch.Tensor,
+        area: torch.Tensor,
+        kpt_weights: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Calculate keypoint loss factor and Euclidean distance loss for keypoints."""
         d = (pred_kpts[..., 0] - gt_kpts[..., 0]).pow(2) + (pred_kpts[..., 1] - gt_kpts[..., 1]).pow(2)
         kpt_loss_factor = kpt_mask.shape[1] / (torch.sum(kpt_mask != 0, dim=1) + 1e-9)
         # e = d / (2 * (area * self.sigmas) ** 2 + 1e-9)  # from formula
         e = d / ((2 * self.sigmas).pow(2) * (area + 1e-9) * 2)  # from cocoeval
-        return (kpt_loss_factor.view(-1, 1) * ((1 - torch.exp(-e)) * kpt_mask)).mean()
+        loss = kpt_loss_factor.view(-1, 1) * ((1 - torch.exp(-e)) * kpt_mask)
+
+        if kpt_weights is not None:
+            w = kpt_weights.to(device=loss.device, dtype=loss.dtype).view(1, -1)
+            weighted_mask = kpt_mask * w
+            return (loss * w).sum() / weighted_mask.sum().clamp(min=1e-9)
+
+        return loss.mean()
 
 
 class v8DetectionLoss:
@@ -638,6 +650,14 @@ class v8PoseLoss(v8DetectionLoss):
         nkpt = self.kpt_shape[0]  # number of keypoints
         sigmas = torch.from_numpy(OKS_SIGMA).to(self.device) if is_pose else torch.ones(nkpt, device=self.device) / nkpt
         self.keypoint_loss = KeypointLoss(sigmas=sigmas)
+        self.kpt1_weight = float(getattr(self.hyp, "kpt1_weight", 1.0))
+        self.kpt_loss_weights = torch.ones(nkpt, device=self.device)
+        if nkpt > 1 and self.kpt1_weight > 0:
+            self.kpt_loss_weights[1] = self.kpt1_weight
+
+    def _get_kpt_loss_weights(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        """Return keypoint-wise weighting tensor for this task."""
+        return self.kpt_loss_weights.to(device=device, dtype=dtype)
 
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate the total loss and detach it for pose estimation."""
@@ -776,7 +796,13 @@ class v8PoseLoss(v8DetectionLoss):
             area = xyxy2xywh(target_bboxes[masks])[:, 2:].prod(1, keepdim=True)
             pred_kpt = pred_kpts[masks]
             kpt_mask = gt_kpt[..., 2] != 0 if gt_kpt.shape[-1] == 3 else torch.full_like(gt_kpt[..., 0], True)
-            kpts_loss = self.keypoint_loss(pred_kpt, gt_kpt, kpt_mask, area)  # pose loss
+            kpts_loss = self.keypoint_loss(
+                pred_kpt,
+                gt_kpt,
+                kpt_mask,
+                area,
+                self._get_kpt_loss_weights(pred_kpt.device, pred_kpt.dtype),
+            )  # pose loss
 
             if pred_kpt.shape[-1] == 3:
                 kpts_obj_loss = self.bce_pose(pred_kpt[..., 2], kpt_mask.float())  # keypoint obj loss
@@ -799,6 +825,18 @@ class PoseLoss26(v8PoseLoss):
             self.target_weights = (
                 torch.from_numpy(RLE_WEIGHT).to(self.device) if is_pose else torch.ones(nkpt, device=self.device)
             )
+
+        self.kpt1_weight = float(getattr(self.hyp, "kpt1_weight", 1.0))
+        self.kpt_loss_weights = torch.ones(nkpt, device=self.device)
+        if nkpt > 1 and self.kpt1_weight > 0:
+            self.kpt_loss_weights[1] = self.kpt1_weight
+            if self.rle_loss is not None:
+                self.target_weights = self.target_weights.clone()
+                self.target_weights[1] = self.kpt1_weight
+
+    def _get_kpt_loss_weights(self, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+        """Return keypoint-wise weighting tensor for this task."""
+        return self.kpt_loss_weights.to(device=device, dtype=dtype)
 
     def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate the total loss and detach it for pose estimation."""
@@ -942,7 +980,13 @@ class PoseLoss26(v8PoseLoss):
             area = xyxy2xywh(target_bboxes[masks])[:, 2:].prod(1, keepdim=True)
             pred_kpt = pred_kpts[masks]
             kpt_mask = gt_kpt[..., 2] != 0 if gt_kpt.shape[-1] == 3 else torch.full_like(gt_kpt[..., 0], True)
-            kpts_loss = self.keypoint_loss(pred_kpt, gt_kpt, kpt_mask, area)  # pose loss
+            kpts_loss = self.keypoint_loss(
+                pred_kpt,
+                gt_kpt,
+                kpt_mask,
+                area,
+                self._get_kpt_loss_weights(pred_kpt.device, pred_kpt.dtype),
+            )  # pose loss
 
             if self.rle_loss is not None and (pred_kpt.shape[-1] == 4 or pred_kpt.shape[-1] == 5):
                 rle_loss = self.calculate_rle_loss(pred_kpt, gt_kpt, kpt_mask)
@@ -951,6 +995,141 @@ class PoseLoss26(v8PoseLoss):
                 kpts_obj_loss = self.bce_pose(pred_kpt[..., 2], kpt_mask.float())  # keypoint obj loss
 
         return kpts_loss, kpts_obj_loss, rle_loss
+
+
+class PoseLoss26Refine(PoseLoss26):
+    """PoseLoss26 with an additional keypoint refinement loss for Pose26Refine heads."""
+
+    def __init__(self, model, tal_topk: int = 10, tal_topk2: int | None = None):
+        """Initialize phase-2 refinement loss."""
+        super().__init__(model, tal_topk, tal_topk2)
+        self.refine_gain = float(getattr(self.hyp, "refine", 1.0))
+        self.refine_prior_gain = float(getattr(self.hyp, "refine_prior", 0.1))
+
+    def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute base pose loss and refinement loss."""
+        base_loss, base_detach = super().loss(preds, batch)
+
+        refine_loss = preds["scores"].sum() * 0.0
+        refine_idx = preds.get("refine_idx")
+        refine_pred = preds.get("refine_kpts")
+
+        if refine_idx is not None and refine_pred is not None and refine_idx.numel() and refine_pred.numel():
+            with torch.no_grad():
+                assign_preds = {
+                    "boxes": preds["boxes"].detach(),
+                    "scores": preds["scores"].detach(),
+                    "feats": preds["feats"],
+                }
+                (fg_mask, target_gt_idx, _, _, _), _, _ = self.get_assigned_targets_and_loss(assign_preds, batch)
+
+            if fg_mask.any():
+                keypoints = batch["keypoints"].to(self.device).float().clone()
+                imgsz = (
+                    torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=refine_pred.dtype) * self.stride[0]
+                )
+                keypoints[..., 0] *= imgsz[1]
+                keypoints[..., 1] *= imgsz[0]
+
+                selected_gt = self._select_target_keypoints(keypoints, batch["batch_idx"].view(-1, 1), target_gt_idx, fg_mask)
+                gather_idx = refine_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], selected_gt.shape[-1])
+                gt_ref = selected_gt.gather(1, gather_idx)
+
+                fg_ref = fg_mask.gather(1, refine_idx)
+                valid = fg_ref.unsqueeze(-1).expand(-1, -1, self.kpt_shape[0])
+                if gt_ref.shape[-1] == 3:
+                    valid = valid & (gt_ref[..., 2] != 0)
+
+                valid_xy = valid.unsqueeze(-1).expand(-1, -1, -1, 2)
+                if valid_xy.any():
+                    pred_xy = refine_pred[..., :2]
+                    gt_xy = gt_ref[..., :2]
+                    kpt_weights = self._get_kpt_loss_weights(pred_xy.device, pred_xy.dtype).view(1, 1, -1, 1)
+                    refine_elem = F.smooth_l1_loss(pred_xy, gt_xy, reduction="none")
+                    valid_xy_f = valid_xy.to(dtype=refine_elem.dtype)
+                    refine_loss = (refine_elem * kpt_weights * valid_xy_f).sum() / (
+                        (kpt_weights * valid_xy_f).sum().clamp(min=1e-9)
+                    )
+                    if self.kpt_shape[0] == 2 and fg_ref.any():
+                        dy = pred_xy[..., 1, 1] - pred_xy[..., 0, 1]
+                        refine_loss = refine_loss + self.refine_prior_gain * F.relu(-dy[fg_ref]).mean()
+
+        refine_loss = refine_loss * self.refine_gain
+        total_loss = base_loss + refine_loss * preds["scores"].shape[0]
+        total_detach = torch.cat((base_detach, refine_loss.detach().unsqueeze(0)), dim=0)
+        return total_loss, total_detach
+
+
+class PoseLoss26MLPRefine(PoseLoss26):
+    """PoseLoss26 with Wing-loss-based keypoint refinement supervision for Pose26MLPRefine heads."""
+
+    def __init__(self, model, tal_topk: int = 10, tal_topk2: int | None = None):
+        """Initialize MLP refinement loss."""
+        super().__init__(model, tal_topk, tal_topk2)
+        self.refine_gain = float(getattr(self.hyp, "refine", 1.0))
+        self.refine_prior_gain = float(getattr(self.hyp, "refine_prior", 0.1))
+        self.refine_wing_w = float(getattr(self.hyp, "refine_wing_w", 5.0))
+        self.refine_wing_eps = float(getattr(self.hyp, "refine_wing_eps", 1.0))
+
+    def _wing_loss(self, diff: torch.Tensor) -> torch.Tensor:
+        """Compute element-wise Wing loss for absolute coordinate differences."""
+        w = max(self.refine_wing_w, 1e-6)
+        eps = max(self.refine_wing_eps, 1e-6)
+        c = w - w * math.log1p(w / eps)
+        return torch.where(diff < w, w * torch.log1p(diff / eps), diff - c)
+
+    def loss(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute base pose loss and MLP refinement Wing loss."""
+        base_loss, base_detach = super().loss(preds, batch)
+
+        refine_loss = preds["scores"].sum() * 0.0
+        refine_idx = preds.get("refine_idx")
+        refine_pred = preds.get("refine_kpts")
+
+        if refine_idx is not None and refine_pred is not None and refine_idx.numel() and refine_pred.numel():
+            with torch.no_grad():
+                assign_preds = {
+                    "boxes": preds["boxes"].detach(),
+                    "scores": preds["scores"].detach(),
+                    "feats": preds["feats"],
+                }
+                (fg_mask, target_gt_idx, _, _, _), _, _ = self.get_assigned_targets_and_loss(assign_preds, batch)
+
+            if fg_mask.any():
+                keypoints = batch["keypoints"].to(self.device).float().clone()
+                imgsz = (
+                    torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=refine_pred.dtype) * self.stride[0]
+                )
+                keypoints[..., 0] *= imgsz[1]
+                keypoints[..., 1] *= imgsz[0]
+
+                selected_gt = self._select_target_keypoints(keypoints, batch["batch_idx"].view(-1, 1), target_gt_idx, fg_mask)
+                gather_idx = refine_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], selected_gt.shape[-1])
+                gt_ref = selected_gt.gather(1, gather_idx)
+
+                fg_ref = fg_mask.gather(1, refine_idx)
+                valid = fg_ref.unsqueeze(-1).expand(-1, -1, self.kpt_shape[0])
+                if gt_ref.shape[-1] == 3:
+                    valid = valid & (gt_ref[..., 2] != 0)
+
+                valid_xy = valid.unsqueeze(-1).expand(-1, -1, -1, 2)
+                if valid_xy.any():
+                    pred_xy = refine_pred[..., :2]
+                    gt_xy = gt_ref[..., :2]
+                    kpt_weights = self._get_kpt_loss_weights(pred_xy.device, pred_xy.dtype).view(1, 1, -1, 1)
+                    refine_elem = self._wing_loss((pred_xy - gt_xy).abs())
+                    valid_xy_f = valid_xy.to(dtype=refine_elem.dtype)
+                    refine_loss = (refine_elem * kpt_weights * valid_xy_f).sum() / (
+                        (kpt_weights * valid_xy_f).sum().clamp(min=1e-9)
+                    )
+                    if self.kpt_shape[0] == 2 and fg_ref.any() and self.refine_prior_gain > 0:
+                        dy = pred_xy[..., 1, 1] - pred_xy[..., 0, 1]
+                        refine_loss = refine_loss + self.refine_prior_gain * F.relu(-dy[fg_ref]).mean()
+
+        refine_loss = refine_loss * self.refine_gain
+        total_loss = base_loss + refine_loss * preds["scores"].shape[0]
+        total_detach = torch.cat((base_detach, refine_loss.detach().unsqueeze(0)), dim=0)
+        return total_loss, total_detach
 
 
 class v8ClassificationLoss:

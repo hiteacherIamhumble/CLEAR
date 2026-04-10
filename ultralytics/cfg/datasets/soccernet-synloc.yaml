@@ -1,0 +1,50 @@
+# Ultralytics YOLO dataset config for Spiideo SoccerNet SynLoc BEV position estimation
+# Task: predict 2 keypoints (pelvis + pelvis_ground) per player for BEV localization
+# Adapted from mmpose sskit task configuration
+#
+# Expected directory structure (YOLO format):
+#   path/
+#   ├── images/
+#   │   ├── train/   # training images
+#   │   ├── val/     # validation images
+#   │   └── test/    # test images
+#   └── labels/
+#       ├── train/   # YOLO-format label files (.txt)
+#       ├── val/
+#       └── test/
+#
+# Label format per line:
+#   class_id x_center y_center width height kpt0_x kpt0_y kpt0_v kpt1_x kpt1_y kpt1_v
+#   where kpt0=pelvis, kpt1=pelvis_ground, v=visibility (0=not labeled, 1=labeled not visible, 2=visible)
+#   All coordinates are normalized to [0, 1] relative to image width/height.
+
+# Dataset paths - UPDATE these to your actual dataset location
+path: /root/autodl-tmp/ultralytics/my_database # dataset root dir
+train: images/train
+val: images/val
+test: images/test
+
+# Keypoints
+kpt_shape: [2, 3] # 2 keypoints, 3 dims (x, y, visibility)
+flip_idx: [0, 1] # no left-right symmetry for midline keypoints
+
+# OKS sigmas for the 2 keypoints (from sskit/Spiideo SoccerNet metainfo)
+sigmas: [0.089, 0.089]
+
+# Occlusion-aware loss weighting.  When true, the keypoint visibility channel
+# carries continuous occlusion weights (from convert_coco_to_yolo_pose.py --occ-alpha)
+# instead of binary 0/1 flags.  Heavier weight on occluded players forces the
+# model to learn to infer keypoint positions from partial observations.
+use_occ_weights: true
+allow_oob_labels: true
+allow_oob_keypoints: true
+
+# Classes
+names:
+  0: person
+
+# Keypoint names
+kpt_names:
+  0:
+    - pelvis
+    - pelvis_ground

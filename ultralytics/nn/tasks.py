@@ -55,8 +55,11 @@ from ultralytics.nn.modules import (
     ImagePoolingAttn,
     Index,
     LRPCHead,
+    P3CrossScaleDeformAttn,
     Pose,
     Pose26,
+    Pose26MLPRefine,
+    Pose26Refine,
     RepC3,
     RepConv,
     RepNCSPELAN4,
@@ -78,6 +81,8 @@ from ultralytics.utils.checks import check_requirements, check_suffix, check_yam
 from ultralytics.utils.loss import (
     E2ELoss,
     PoseLoss26,
+    PoseLoss26MLPRefine,
+    PoseLoss26Refine,
     v8ClassificationLoss,
     v8DetectionLoss,
     v8OBBLoss,
@@ -616,7 +621,14 @@ class PoseModel(DetectionModel):
 
     def init_criterion(self):
         """Initialize the loss criterion for the PoseModel."""
-        return E2ELoss(self, PoseLoss26) if getattr(self, "end2end", False) else v8PoseLoss(self)
+        head = self.model[-1]
+        if getattr(head, "mlp_refine_enabled", False):
+            loss_fn = PoseLoss26MLPRefine
+        elif getattr(head, "refine_enabled", False):
+            loss_fn = PoseLoss26Refine
+        else:
+            loss_fn = PoseLoss26
+        return E2ELoss(self, loss_fn) if getattr(self, "end2end", False) else loss_fn(self)
 
 
 class ClassificationModel(BaseModel):
@@ -1689,6 +1701,8 @@ def parse_model(d, ch, verbose=True):
                 YOLOESegment26,
                 Pose,
                 Pose26,
+                Pose26MLPRefine,
+                Pose26Refine,
                 OBB,
                 OBB26,
             }
@@ -1696,12 +1710,28 @@ def parse_model(d, ch, verbose=True):
             args.extend([reg_max, end2end, [ch[x] for x in f]])
             if m is Segment or m is YOLOESegment or m is Segment26 or m is YOLOESegment26:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, Segment26, YOLOESegment, YOLOESegment26, Pose, Pose26, OBB, OBB26}:
+            if m in {
+                Detect,
+                YOLOEDetect,
+                Segment,
+                Segment26,
+                YOLOESegment,
+                YOLOESegment26,
+                Pose,
+                Pose26,
+                Pose26MLPRefine,
+                Pose26Refine,
+                OBB,
+                OBB26,
+            }:
                 m.legacy = legacy
         elif m is v10Detect:
             args.append([ch[x] for x in f])
         elif m is ImagePoolingAttn:
             args.insert(1, [ch[x] for x in f])  # channels as second arg
+        elif m is P3CrossScaleDeformAttn:
+            args = [[ch[x] for x in f], *args]
+            c2 = ch[f[0]]
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
         elif m is CBLinear:

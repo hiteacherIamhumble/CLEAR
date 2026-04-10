@@ -231,6 +231,7 @@ class PoseValidator(DetectionValidator):
 
     def scale_preds(self, predn: dict[str, torch.Tensor], pbatch: dict[str, Any]) -> dict[str, torch.Tensor]:
         """Scales predictions to the original image size."""
+        allow_oob = bool(self.data.get("allow_oob_labels", self.data.get("allow_oob_keypoints", False)))
         return {
             **super().scale_preds(predn, pbatch),
             "kpts": ops.scale_coords(
@@ -238,6 +239,7 @@ class PoseValidator(DetectionValidator):
                 predn["keypoints"].clone(),
                 pbatch["ori_shape"],
                 ratio_pad=pbatch["ratio_pad"],
+                clip=not allow_oob,
             ),
         }
 

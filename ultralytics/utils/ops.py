@@ -106,6 +106,7 @@ def scale_boxes(
     ratio_pad: tuple | None = None,
     padding: bool = True,
     xywh: bool = False,
+    clip: bool = True,
 ) -> torch.Tensor | np.ndarray:
     """Rescale bounding boxes from one image shape to another.
 
@@ -119,6 +120,7 @@ def scale_boxes(
         ratio_pad (tuple, optional): Tuple of (ratio, pad) for scaling. If None, calculated from image shapes.
         padding (bool): Whether boxes are based on YOLO-style augmented images with padding.
         xywh (bool): Whether box format is xywh (True) or xyxy (False).
+        clip (bool): Whether to clip coordinates to image bounds.
 
     Returns:
         (torch.Tensor | np.ndarray): Rescaled bounding boxes in the same format as input.
@@ -138,7 +140,10 @@ def scale_boxes(
             boxes[..., 2] -= pad_x  # x padding
             boxes[..., 3] -= pad_y  # y padding
     boxes[..., :4] /= gain
-    return boxes if xywh else clip_boxes(boxes, img0_shape)
+    # clip_boxes() expects xyxy; keep xywh boxes unchanged here to avoid altering width/height semantics.
+    if xywh or not clip:
+        return boxes
+    return clip_boxes(boxes, img0_shape)
 
 
 def make_divisible(x: int, divisor):
@@ -566,7 +571,15 @@ def scale_masks(
     return F.interpolate(masks[..., top:bottom, left:right].float(), shape, mode="bilinear")  # NCHW masks
 
 
-def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None, normalize: bool = False, padding: bool = True):
+def scale_coords(
+    img1_shape,
+    coords,
+    img0_shape,
+    ratio_pad=None,
+    normalize: bool = False,
+    padding: bool = True,
+    clip: bool = True,
+):
     """Rescale segment coordinates from img1_shape to img0_shape.
 
     Args:
@@ -576,6 +589,7 @@ def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None, normalize: bool
         ratio_pad (tuple, optional): Ratio and padding values as ((ratio_h, ratio_w), (pad_w, pad_h)).
         normalize (bool): Whether to normalize coordinates to range [0, 1].
         padding (bool): Whether coordinates are based on YOLO-style augmented images with padding.
+        clip (bool): Whether to clip coordinates to image bounds.
 
     Returns:
         (torch.Tensor): Scaled coordinates.
@@ -594,7 +608,8 @@ def scale_coords(img1_shape, coords, img0_shape, ratio_pad=None, normalize: bool
         coords[..., 1] -= pad[1]  # y padding
     coords[..., 0] /= gain
     coords[..., 1] /= gain
-    coords = clip_coords(coords, img0_shape)
+    if clip:
+        coords = clip_coords(coords, img0_shape)
     if normalize:
         coords[..., 0] /= img0_w  # width
         coords[..., 1] /= img0_h  # height

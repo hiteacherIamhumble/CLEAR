@@ -43,7 +43,7 @@ from .utils import (
 )
 
 # Ultralytics dataset *.cache version, >= 1.0.0 for Ultralytics YOLO models
-DATASET_CACHE_VERSION = "1.0.3"
+DATASET_CACHE_VERSION = "1.0.4"
 
 
 class YOLODataset(BaseDataset):
@@ -118,6 +118,7 @@ class YOLODataset(BaseDataset):
                     repeat(nkpt),
                     repeat(ndim),
                     repeat(self.single_cls),
+                    repeat(bool(self.data.get("allow_oob_labels", self.data.get("allow_oob_keypoints", False)))),
                 ),
             )
             pbar = TQDM(results, desc=desc, total=total)
