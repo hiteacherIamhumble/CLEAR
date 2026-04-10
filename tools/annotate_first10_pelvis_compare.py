@@ -28,7 +28,9 @@ class GTObject:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Annotate first 10 pelvis-proj test images for GT, baseline, and stage1/two-stage")
+    p = argparse.ArgumentParser(
+        description="Annotate first 10 pelvis-proj test images for GT, baseline, and stage1/two-stage"
+    )
     p.add_argument("--images-dir", type=Path, default=ROOT / "my_database/images/test")
     p.add_argument("--labels-dir", type=Path, default=ROOT / "my_database/labels/test")
     p.add_argument("--stage1-ckpt", type=Path, required=True)
@@ -74,7 +76,9 @@ def load_gt(label_path: Path, img_w: int, img_h: int) -> list[GTObject]:
     return gts
 
 
-def run_inference(model_path: Path, image_paths: list[Path], device: str, imgsz: int, conf: float, iou: float) -> dict[str, list[dict]]:
+def run_inference(
+    model_path: Path, image_paths: list[Path], device: str, imgsz: int, conf: float, iou: float
+) -> dict[str, list[dict]]:
     model = YOLO(str(model_path))
     results = model.predict(
         source=[str(p) for p in image_paths],
@@ -109,16 +113,24 @@ def run_inference(model_path: Path, image_paths: list[Path], device: str, imgsz:
     return out
 
 
-def draw_pair(img: np.ndarray, p1: list[float], p2: list[float], line_color: tuple[int, int, int], p1_color: tuple[int, int, int], p2_color: tuple[int, int, int], thickness: int) -> None:
-    x1, y1 = int(round(p1[0])), int(round(p1[1]))
-    x2, y2 = int(round(p2[0])), int(round(p2[1]))
+def draw_pair(
+    img: np.ndarray,
+    p1: list[float],
+    p2: list[float],
+    line_color: tuple[int, int, int],
+    p1_color: tuple[int, int, int],
+    p2_color: tuple[int, int, int],
+    thickness: int,
+) -> None:
+    x1, y1 = round(p1[0]), round(p1[1])
+    x2, y2 = round(p2[0]), round(p2[1])
     cv2.line(img, (x1, y1), (x2, y2), line_color, thickness, cv2.LINE_AA)
     cv2.circle(img, (x1, y1), thickness + 2, p1_color, -1, cv2.LINE_AA)
     cv2.circle(img, (x2, y2), thickness + 2, p2_color, -1, cv2.LINE_AA)
 
 
 def draw_box(img: np.ndarray, xyxy: list[float], color: tuple[int, int, int], thickness: int) -> None:
-    x1, y1, x2, y2 = [int(round(v)) for v in xyxy]
+    x1, y1, x2, y2 = [round(v) for v in xyxy]
     cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness, cv2.LINE_AA)
 
 
@@ -160,7 +172,9 @@ def save_pred_image(src: np.ndarray, gts: list[GTObject], preds: list[dict], out
     for pred in preds:
         draw_box(img, pred["bbox_xyxy"], (0, 255, 0), thickness)
         if pred["pelvis"][2] > 0 and pred["pelvis_ground"][2] > 0:
-            draw_pair(img, pred["pelvis"], pred["pelvis_ground"], (255, 200, 0), (255, 120, 0), (255, 255, 0), thickness)
+            draw_pair(
+                img, pred["pelvis"], pred["pelvis_ground"], (255, 200, 0), (255, 120, 0), (255, 255, 0), thickness
+            )
     add_header(img, title)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), img)
@@ -310,7 +324,16 @@ def main() -> None:
 
     summary_path = args.output_dir / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2))
-    print(json.dumps({"output_dir": str(args.output_dir), "summary_json": str(summary_path), "best_improvement": summary["best_improvement"]}, indent=2))
+    print(
+        json.dumps(
+            {
+                "output_dir": str(args.output_dir),
+                "summary_json": str(summary_path),
+                "best_improvement": summary["best_improvement"],
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":
