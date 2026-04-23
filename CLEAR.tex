@@ -1,0 +1,410 @@
+\documentclass[runningheads]{llncs}
+\usepackage[utf8]{inputenc}
+\usepackage{eccv}
+\usepackage{eccvabbrv}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[table]{xcolor}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage[capitalize,nameinlink,noabbrev]{cleveref}
+\usepackage{subcaption}
+\usepackage[accsupp]{axessibility}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{array}
+\usepackage{multirow}
+
+\title{CLEAR: Context-Aware Localization Enhancement and Refinement for Crowded Soccer Scenes}
+\titlerunning{CLEAR}
+\author{Yuhang DAI\inst{1} \and Qing LI\inst{1}}
+\authorrunning{DAI et al.}
+\institute{Department of Computing, The Hong Kong Polytechnic University\\
+\email{yuhang.dai@connect.polyu.hk}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Single-frame athlete localization in broadcast soccer imagery is constrained by a mismatch between standard pose quality and world-coordinate localization quality. In the SynLoc setting, the final score is determined by the projected ground-plane position rather than by generic keypoint agreement, so strong pose AP does not necessarily yield strong frame-level localization. This mismatch becomes particularly severe when 4K frames are resized to a fixed 960-resolution protocol: distant athletes become extremely small, crowded groups are harder to separate, and small errors in the predicted ground-contact point are amplified by image-to-ground projection and penalized by LocSim-based evaluation. We address this problem with \textbf{CLEAR}, a \textbf{C}ontext-aware \textbf{L}ocalization \textbf{E}nhancement and \textbf{A}lignment with keypoint \textbf{R}efinement framework built on a one-stage YOLO26x-Pose backbone. CLEAR strengthens the pipeline at three task-critical locations: an AIFI-based semantic disambiguation block at P5 improves global contextual reasoning in crowded scenes, a P3-centered cross-scale deformable attention module enhances weak small-instance representations, and a lightweight local keypoint refiner corrects residual errors in \texttt{pelvis} and \texttt{pelvis\_ground} coordinates that most strongly affect LocSim. On the SynLoc test set, CLEAR improves mAP-LocSim from 76.2\% for the official SSKIT baseline and 71.3\% for plain YOLO26x-Pose to 82.2\%, while increasing frame accuracy to 50.7\%. These results show that targeted context modeling, small-instance enhancement, and metric-aligned refinement are more effective for this task than optimizing conventional pose metrics alone.
+\keywords{Sports Analytics \and Pose Estimation \and Player Localization \and Deformable Attention}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Player localization from broadcast soccer video is a core component of modern sports understanding systems. Reliable player positions support tactical visualization, event retrieval, team-shape analysis, tracking initialization, and downstream game-state reconstruction~\cite{deliege2021soccernetv2,cioppa2022scaling,somers2024soccernet}. Among these applications, soccer is especially demanding because the field is large, player scale varies dramatically across the image, and heavy crowding appears in the same frame as tiny distant athletes. This paper studies the single-frame setting of world-coordinate athlete localization from broadcast-like 4K soccer imagery, following the SynLoc task introduced by SSKIT~\cite{ardo2025}. The objective is to detect every visible player and predict the image-space point whose projection determines the player position on the pitch.
+
+This setting differs fundamentally from standard pose estimation. The model is not rewarded simply for producing plausible keypoints in the image plane. Instead, performance is determined by a projection-based localization metric, so the final goal is accurate world-space positioning. This difference is easy to overlook when one starts from a strong pose baseline, because the baseline may already achieve excellent conventional keypoint quality. Yet the central observation of this work is that such performance still does not guarantee accurate frame-level localization under SynLoc evaluation.
+
+The reason is structural. In the benchmark protocol, original 4K frames are resized to a fixed input resolution of 960. We keep this setting to remain consistent with the benchmark and to avoid extracting extra information from the original resolution. Under this constraint, distant athletes shrink to a few pixels, crowded groups lose visual separability, and small coordinate shifts become significant once projected to the ground plane. The evaluator uses the predicted \texttt{pelvis\_ground} keypoint to compute the player position and matches predictions with LocSim rather than IoU~\cite{ardo2025}. As a result, the gap between strong pose AP and strong localization accuracy becomes not an implementation detail, but the central challenge of the task.
+
+Our starting point is a strong one-stage pose baseline. Replacing an oversized baseline with YOLO26x-Pose yields a faster-converging and more parameter-efficient system, while preserving real-time single-stage inference~\cite{ultralytics2025yolo26}. However, this replacement alone is insufficient. The key limitation is not generic model capacity, but the mismatch between the default one-stage pose pipeline and the error patterns that dominate crowded soccer localization. In practice, these errors can be grouped into three concrete categories: occluded players, localization error, and false positive players.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{problem.png}
+    \caption{Representative failure categories in crowded soccer localization. From left to right: (a) \emph{occluded player}, where heavy overlap causes the athlete to be missed or predicted unstably; (b) \emph{localization error}, where the player is detected but the predicted \texttt{pelvis\_ground} is inaccurate; and (c) \emph{false positive player}, where clutter or neighboring structures trigger a spurious detection. These three problems motivate the design of CLEAR.}
+    \label{fig:problem_cases}
+\end{figure}
+
+The first problem is \emph{occluded players}. In crowded broadcast scenes, the visible evidence for one athlete is often incomplete. The torso may be visible while the legs are covered, or several nearby players may overlap so strongly that only fragments of each body remain. In such cases, local feature aggregation is often insufficient to build a stable person hypothesis, and the model misses the player entirely. Since frame accuracy requires all ground-truth players in a frame to be recovered, these misses are especially costly.
+
+The second problem is \emph{localization error}. Even when a player is detected, the predicted \texttt{pelvis\_ground} may not coincide with the correct contact position on the field. This error is visually subtle in image space, but it becomes much more important after geometric projection. A detection may therefore look correct to a human observer and still receive a weak LocSim score because its projected point drifts on the ground plane. This behavior exposes a mismatch between standard coarse keypoint regression and the final evaluation target.
+
+The third problem is \emph{false positive players}. Structured clutter in soccer scenes is unusually deceptive: field lines, ad boards, player fragments, and neighboring athletes may together resemble a valid instance. If the model lacks stable global context, these responses can survive as spurious detections. False positives hurt precision directly, but they also complicate matching in dense scenes because they occupy scores and locations that should belong to real players.
+
+These three problems suggest that simply replacing the entire system with a different paradigm is not the most informative solution. Top-down transformer-based pose estimators such as ViTPose are powerful~\cite{xu2022vitpose}, but they introduce a different computational regime based on person crops and per-instance processing. In crowded soccer scenes, such a change entangles many factors at once, including detector quality, crop quality, runtime, and transformer capacity. We instead take a more targeted route: retain a strong one-stage YOLO26x-Pose backbone and inject additional modeling power only at the stages most directly connected to the three failure categories.
+
+Based on this intuition, we propose \textbf{CLEAR}, a \textbf{C}ontext-aware \textbf{L}ocalization \textbf{E}nhancement and \textbf{A}lignment with keypoint \textbf{R}efinement framework for crowded soccer scenes. CLEAR strengthens the one-stage pipeline in three ways. First, an AIFI-based semantic disambiguation block at P5 improves global context modeling and helps suppress false positive players. Second, a P3-centered cross-scale deformable attention module enhances weak high-resolution representations and improves recovery of difficult or partially occluded players. Third, a lightweight local keypoint refiner predicts residual corrections for \texttt{pelvis} and \texttt{pelvis\_ground}, explicitly targeting the coordinate errors that most strongly affect LocSim.
+
+The key idea is not to maximize generic pose quality, but to make the architecture consistent with the evaluation target. Global context helps the model decide whether a crowded or ambiguous response should be interpreted as a real player. Cross-scale enhancement helps the model preserve weak athlete evidence instead of losing it in the pyramid. Residual refinement makes the final projected localization point more accurate even when the coarse detection is already correct. This problem-driven decomposition gives the method a clear rationale and makes the experimental behavior easier to interpret.
+
+Our contributions are fourfold. First, we recast the gap between standard pose quality and SynLoc-style world localization through three practically important failure categories: occluded players, localization error, and false positive players. Second, we propose CLEAR, a one-stage localization-oriented extension of YOLO26x-Pose that introduces global semantic reasoning, sparse cross-scale enhancement, and local metric-aligned keypoint refinement without abandoning the real-time single-stage design. Third, we show that the three modules contribute complementary gains and that their progression aligns with the method hypothesis: context reduces false positives, cross-scale aggregation improves recovery of difficult players, and local refinement improves projection-sensitive localization accuracy. Fourth, on the SynLoc test set, CLEAR achieves the best overall performance among the evaluated variants, improving mAP-LocSim to 82.2\% and frame accuracy to 50.7\%.
+
+\input{related-works}
+
+\section{Problem Setting and Baselines}
+\label{sec:problem-baseline}
+
+\subsection{Task Definition}
+\label{sec:task-definition}
+
+We formulate athlete localization as a pose-style detection problem with two keypoints per person. For each player instance, the annotation includes a person box, a \texttt{pelvis} keypoint, and a \texttt{pelvis\_ground} keypoint. The first point describes the body center in the image, while the second provides the ground-contact point used for localization on the pitch. This representation is more compact than generic 17-keypoint human pose estimation and better aligned with the final task objective.
+
+Let the dataset be denoted by
+\[
+\mathcal{D}=\{(I_t,\mathcal{Y}_t,\Pi_t)\}_{t=1}^{T},
+\]
+where $I_t$ is the $t$-th broadcast frame, $\mathcal{Y}_t$ is the set of player annotations, and $\Pi_t$ is the image-to-ground projection associated with that frame. Each player annotation is written as
+\[
+y_{t,n}=\bigl(b_{t,n},u_{t,n}^{(0)},u_{t,n}^{(1)}\bigr),
+\]
+where $b_{t,n}$ is the bounding box, $u_{t,n}^{(0)} \in \mathbb{R}^2$ is the image-space \texttt{pelvis}, and $u_{t,n}^{(1)} \in \mathbb{R}^2$ is the image-space \texttt{pelvis\_ground}. The model predicts
+\[
+\hat{\mathcal{Y}}_t = \left\{\bigl(\hat{b}_{t,j},\hat{u}_{t,j}^{(0)},\hat{u}_{t,j}^{(1)},\hat{s}_{t,j}\bigr)\right\}_{j=1}^{\hat{N}_t},
+\]
+where $\hat{s}_{t,j}$ is the confidence score.
+
+This design has two advantages for the current task. First, it keeps the prediction target tightly coupled to localization rather than to generic full-body pose estimation. Second, it permits the use of a standard pose-style detection framework while still matching the benchmark evaluator, which expects a keypoint-based localization representation. In other words, the task is solved through a pose head, but the evaluation target is world localization.
+
+\subsection{Dataset Protocol}
+\label{sec:dataset-protocol}
+
+Our experiments follow the SynLoc-style single-frame soccer localization protocol introduced by SSKIT~\cite{ardo2025}. The data consist of broadcast-like 4K soccer frames with player-level annotations and image-to-ground projection metadata. In our local training and evaluation setup, the working split contains 42{,}504 training images, 6{,}777 validation images, and 9{,}309 test images. The corresponding instance counts are 668{,}259, 109{,}351, and 148{,}164 players, respectively. These numbers illustrate the practical scale of the task: the model must remain stable over a large dataset with substantial crowding, wide scale variation, and strong viewpoint changes.
+
+The input protocol is intentionally strict. Although the source imagery is 4K, each frame is resized to an inference resolution of 960 before it is passed to the detector. This choice mirrors the benchmark setting and prevents the method from benefiting from hidden extra resolution. It also makes the task substantially harder. Small distant players become weak at high-resolution feature levels, while crowded groups lose separation exactly where the model still needs to localize the player foot-contact point. This is why our design focuses on preserving useful support at P3 and on refining the final predicted localization point rather than on merely increasing detector capacity.
+
+The data format is likewise specialized to the localization task. Each label row stores a class id, the normalized person box, and the two keypoints \texttt{pelvis} and \texttt{pelvis\_ground}. Because the ground-projection point may fall near or even slightly outside the image border in some frames, our training pipeline supports out-of-bounds supervision. This detail is practical rather than cosmetic: clipping such labels would introduce artificial bias exactly in the coordinate that determines the final world-space score.
+
+\subsection{Evaluation Metrics}
+\label{sec:evaluation-metrics}
+
+The evaluation protocol is based on LocSim, which measures the similarity between a predicted projected point and a ground-truth projected point. Let
+\[
+g_{t,n}=\Pi_t\!\left(u_{t,n}^{(1)}\right), \qquad \hat{g}_{t,j}=\Pi_t\!\left(\hat{u}_{t,j}^{(1)}\right)
+\]
+be the ground-plane locations of the ground-truth and predicted players. Following the benchmark evaluator, LocSim is defined as
+\begin{equation}
+\operatorname{LocSim}(\hat{g},g)=\exp\!\left(\log(0.05)\frac{\|\hat{g}-g\|_2^2}{\tau^2}\right),
+\label{eq:locsim}
+\end{equation}
+where $\tau=1$ in the evaluator. This definition gives LocSim a sharp distance sensitivity: once the projected point drifts, the score decays rapidly. As a result, even a small image-space error can lead to a substantial world-space penalty.
+
+The primary benchmark metric is mAP-LocSim, which averages precision over thresholds from 0.50 to 0.95. We also report precision, recall, and F1 at LocSim$=0.5$ under the validation-derived score threshold, together with frame accuracy. Frame accuracy is especially strict because a frame is counted as correct only when all ground-truth players are recovered at the operating point. In crowded soccer scenes, this metric exposes a form of completeness that mAP alone may understate. A method can have high average precision yet still fail whole frames if it misses a small number of difficult players.
+
+For completeness, the benchmark also reports a weaker bbox-based localization proxy in which the bottom center of the predicted box is used in place of the keypoint-defined ground-contact point. The consistent gap between keypoint-based LocSim and bbox-based LocSim illustrates why a localization-specific keypoint representation is necessary. The box bottom center is often a poor substitute for the true projected player position, especially under occlusion and strong perspective variation.
+
+\subsection{Benchmark and Internal Baselines}
+\label{sec:baseline-design}
+
+We evaluate CLEAR against two complementary baselines. The first is the official SSKIT benchmark baseline~\cite{ardo2025}, which serves as the external reference point for SynLoc. We treat this baseline as the benchmark-provided anchor under the same fixed-resolution protocol and evaluation metric. Its role in this paper is not to provide architectural detail for direct modification, but to provide a fair task-level reference under the published SynLoc setting.
+
+The second baseline is our internal YOLO26x-Pose adaptation. This baseline is much closer to the proposed method and therefore more informative for mechanism-level analysis. Starting from the pretrained \texttt{yolo26x-pose.pt} checkpoint, we replace the default 17-keypoint head with a two-keypoint prediction head using \texttt{kpt\_shape=[2,3]}. The model then predicts a person box, \texttt{pelvis}, and \texttt{pelvis\_ground} for each instance in a single forward pass. This baseline preserves the efficiency advantages of one-stage inference and provides a strong practical starting point for crowded sports scenes.
+
+This internal baseline is important because it reveals the true problem addressed by CLEAR. Once the detector is already strong and converges efficiently, the remaining gap is no longer simply ``better detection'' in the usual sense. Instead, the task becomes one of crowded-scene disambiguation, weak-instance preservation, and projection-sensitive keypoint refinement. In that sense, CLEAR should be understood not as a generic replacement for YOLO26x-Pose, but as a task-oriented extension of it.
+
+\begin{figure}[t]
+    \centering
+    \IfFileExists{yolo26.png}{
+        \includegraphics[width=\linewidth]{yolo26.png}
+    }{
+        \fbox{\rule{0pt}{2.2in}\rule{0.95\linewidth}{0pt}}
+    }
+    \caption{Baseline YOLO26x-Pose pipeline adapted to the two-keypoint localization setting. The figure can illustrate the standard one-stage feature pyramid and pose head before CLEAR adds localization-oriented enhancements.}
+    \label{fig:yolo26_baseline}
+\end{figure}
+
+\section{Method}
+\label{sec:method}
+
+CLEAR is designed as a targeted extension of YOLO26x-Pose rather than as a full architecture replacement. The central design principle is simple: each added module should correspond to one of the observed failure categories, and it should be inserted at the stage where that failure is most naturally addressed. This yields a method with three coordinated components: global semantic disambiguation for false positive suppression, cross-scale feature enhancement for difficult or occluded players, and local residual refinement for projection-sensitive localization accuracy.
+
+\subsection{Method Overview}
+\label{sec:method-overview}
+
+Let $(F_3,F_4,F_5)$ denote the standard feature pyramid produced by YOLO26x-Pose at strides 8, 16, and 32. CLEAR transforms these features in three steps:
+\begin{align}
+\bar{F}_5 &= \mathcal{G}(F_5), \\
+\bar{F}_3 &= \mathcal{D}(F_3,F_4,\bar{F}_5), \\
+\hat{\mathcal{Y}}^{c}_t &= \mathcal{H}(\bar{F}_3,F_4,\bar{F}_5), \\
+\hat{\mathcal{Y}}_t &= \mathcal{R}(\hat{\mathcal{Y}}^{c}_t,\bar{F}_3),
+\end{align}
+where $\mathcal{G}$ is the semantic disambiguation module, $\mathcal{D}$ is the cross-scale deformable enhancement module, $\mathcal{H}$ is the coarse pose head, and $\mathcal{R}$ is the local keypoint refiner. The output of the final stage is still a standard detection set with boxes and two keypoints, so the method remains fully compatible with the benchmark evaluator.
+
+This design matters because the three modules are not redundant. Global disambiguation acts before the detector decides whether a crowded response corresponds to a valid player. Cross-scale enhancement acts before the coarse head predicts keypoints, so it can rescue fragile high-resolution evidence that would otherwise be lost. Local refinement acts after the coarse prediction is already available, so it can focus purely on residual correction. The method therefore follows a coarse-to-fine logic that matches the actual error accumulation path of the task.
+
+\subsection{Global Semantic Disambiguation via AIFI}
+\label{sec:aifi-p5}
+
+A remaining challenge in crowded scenes is that semantically ambiguous responses at coarse scales can survive into the prediction head as false positive or unstable detections. However, this is also the stage where long-range reasoning is cheapest. We therefore insert an AIFI block at P5, following the efficient hybrid encoder design in RT-DETR~\cite{zhao2024detrs}.
+
+Given $F_5 \in \mathbb{R}^{C_5 \times H_5 \times W_5}$, we flatten it into a token sequence, add 2D sine-cosine positional embeddings, and apply self-attention followed by a feed-forward network:
+\begin{align}
+X_5^{(1)} &= X_5 + \operatorname{MHA}\!\left(\operatorname{LN}(X_5 + E_5)\right), \\
+X_5^{(2)} &= X_5^{(1)} + \operatorname{FFN}\!\left(\operatorname{LN}(X_5^{(1)})\right),
+\end{align}
+then reshape the result back to the two-dimensional feature map
+\[
+\bar{F}_5 = \operatorname{reshape}(X_5^{(2)}).
+\]
+Because P5 has the strongest semantic abstraction and the smallest spatial size, the attention cost remains modest while the contextual benefit is high.
+
+The motivation of this module is direct. False positive players often arise when the model sees locally plausible but globally inconsistent evidence. A player fragment near a field marking or a mixed response between neighboring athletes may be difficult to reject using only local convolutional features. AIFI helps resolve these cases by letting the model compare each coarse location against the wider player arrangement in the scene.
+
+The advantage of this design is that it adds global reasoning exactly where it is most useful and most affordable. We do not replace the entire backbone with transformer blocks, nor do we apply dense attention on high-resolution maps. Instead, we only strengthen the coarsest semantic stage, which is enough to improve context-sensitive disambiguation while preserving the efficiency of the one-stage detector.
+
+\begin{figure}[t]
+    \centering
+    \IfFileExists{innovation1.png}{
+        \includegraphics[width=\linewidth]{innovation1.png}
+    }{
+        \fbox{\rule{0pt}{2.3in}\rule{0.95\linewidth}{0pt}}
+    }
+    \caption{Innovation I: semantic disambiguation at P5 using AIFI. The figure can illustrate how global context suppresses clutter-induced false positive players and stabilizes crowded-scene semantics before coarse prediction.}
+    \label{fig:innovation1}
+\end{figure}
+
+\subsection{Cross-Scale Deformable Enhancement for Difficult Players}
+\label{sec:p3csda}
+
+The second module addresses the weakness of small and difficult player representation at high resolution. Under the fixed 960 protocol, distant or partially occluded players often appear only as weak responses on P3. Standard multi-scale fusion does provide semantic information from higher levels, but it does so in a fixed local manner. We instead allow each P3 query to retrieve sparse, informative support from P3, P4, and P5 jointly.
+
+Let $Q_3$ be the projected P3 query feature and let $(V_3,V_4,V_5)$ be the projected values at the three levels. For each P3 query location $r$, cross-scale deformable attention computes
+\begin{equation}
+z_r = \sum_{\ell \in \{3,4,5\}} \sum_{h=1}^{H} \sum_{m=1}^{M}
+a_{r,\ell,h,m} W_h V_{\ell}\!\left(\pi_{\ell}(r)+\Delta p_{r,\ell,h,m}\right),
+\label{eq:p3csda}
+\end{equation}
+where $\pi_{\ell}(r)$ is the reference point, $\Delta p_{r,\ell,h,m}$ is a learned sampling offset, and $a_{r,\ell,h,m}$ is the corresponding attention weight. The output is written back to P3 through a residual gate, producing
+\[
+\bar{F}_3 = F_3 + \gamma W_o(z).
+\]
+In our implementation, the module uses eight heads and four sampling points per head per level.
+
+The motivation here is not to build a larger generic feature encoder, but to preserve fragile athlete evidence that standard fusion may dilute. Occluded players are often not completely invisible; they are simply too weak or too entangled to survive coarse transmission. By allowing P3 queries to request support from higher-level semantic maps only where needed, the module strengthens hard cases without paying the cost of dense attention across the full image.
+
+This module is especially relevant for crowded soccer imagery because small-instance difficulty and crowding co-occur. A tiny distant player may also be partially overlapped by a nearby player or field structure. Under such conditions, a fixed fusion topology is often too rigid. Sparse cross-scale sampling is more suitable because it allows the model to decide which support locations matter most for each query.
+
+\begin{figure}[t]
+    \centering
+    \IfFileExists{innovation2.png}{
+        \includegraphics[width=\linewidth]{innovation2.png}
+    }{
+        \fbox{\rule{0pt}{2.3in}\rule{0.95\linewidth}{0pt}}
+    }
+    \caption{Innovation II: P3 cross-scale deformable enhancement. The figure can illustrate how weak player evidence on P3 receives sparse semantic support from P4 and P5, improving recovery of difficult or partially occluded athletes.}
+    \label{fig:innovation2}
+\end{figure}
+
+\subsection{Metric-Aligned Local Keypoint Refinement}
+\label{sec:local-refine}
+
+The third module addresses the gap between coarse keypoint prediction and world-coordinate localization. Once the model has detected a player, the remaining challenge is often not whether the player exists, but whether the predicted \texttt{pelvis\_ground} is sufficiently precise after projection. For this reason, we attach a lightweight local refiner to the top-scoring candidate detections rather than redesigning the whole head.
+
+Let $\tilde{u}_{j,m}$ denote the coarse prediction for keypoint $m \in \{0,1\}$ of candidate $j$. We sample local P3 evidence at that coordinate,
+\[
+\phi_{j,m}=\operatorname{Sample}(\bar{F}_3,\tilde{u}_{j,m}),
+\]
+and concatenate it with the relative sub-cell coordinate
+\[
+\delta_{j,m}=\frac{\tilde{u}_{j,m}}{s_3}-\left\lfloor\frac{\tilde{u}_{j,m}}{s_3}\right\rfloor.
+\]
+A lightweight MLP then predicts a residual correction
+\[
+\Delta u_{j,m}=f_{\text{MLP}}([\phi_{j,m};\delta_{j,m}]), \qquad
+\hat{u}_{j,m}=\tilde{u}_{j,m}+\Delta u_{j,m}.
+\]
+This design keeps the refiner narrowly focused: it is not responsible for discovering instances, but for improving the localization accuracy of already detected players.
+
+The corresponding refinement supervision is
+\begin{equation}
+\mathcal{L}_{\text{ref}}=
+\frac{1}{|\mathcal{S}|}\sum_{(j,m)\in\mathcal{S}} \omega_m\,\operatorname{Wing}\!\left(|\hat{u}_{j,m}-u_{j,m}|\right)
++ \lambda_{\text{prior}} \frac{1}{|\mathcal{S}|}\sum_{j\in\mathcal{S}} \operatorname{ReLU}\!\bigl(-(\hat{y}_{j,1}-\hat{y}_{j,0})\bigr),
+\label{eq:ref-loss}
+\end{equation}
+where the second term encodes a simple geometric prior that encourages \texttt{pelvis\_ground} to remain below \texttt{pelvis} in image space. The total stage-two objective is
+\[
+\mathcal{L}_{\text{total}}=\mathcal{L}_{\text{base}}+\lambda_{\text{ref}}\mathcal{L}_{\text{ref}}.
+\]
+
+This module is metric-aligned in a stronger sense than a generic pose refiner. It improves exactly the two coordinates that define the final projected location, and its main effect should therefore appear in mAP-LocSim and frame accuracy rather than in coarse recall. This expectation is confirmed later by the ablation results.
+
+\begin{figure}[t]
+    \centering
+    \IfFileExists{innovation3.png}{
+        \includegraphics[width=\linewidth]{innovation3.png}
+    }{
+        \fbox{\rule{0pt}{2.3in}\rule{0.95\linewidth}{0pt}}
+    }
+    \caption{Innovation III: metric-aligned local keypoint refinement. The figure can illustrate how coarse predictions are locally corrected using enhanced P3 evidence, reducing projection-sensitive localization error.}
+    \label{fig:innovation3}
+\end{figure}
+
+\subsection{Training and Inference Procedure}
+\label{sec:train-infer}
+
+The full CLEAR pipeline follows a two-stage training strategy and a single-stage inference path with lightweight post-head refinement. The structure is summarized in \Cref{alg:clear}. Stage 1 learns the semantic disambiguation and cross-scale enhancement modules together with the coarse pose head. Stage 2 initializes from the best stage-1 checkpoint and adds the local keypoint refiner, which is then optimized jointly with the rest of the network under the refinement-aware loss.
+
+This design is practical for two reasons. First, it stabilizes optimization. The coarse detector reaches a strong operating point before the model is asked to learn residual correction. Second, it makes module attribution cleaner. If all modules were introduced simultaneously from scratch, it would be harder to tell whether gains came from better feature extraction or from a more specialized final-stage correction.
+
+At inference time, the pipeline remains simple. The image is passed through the backbone and neck, the P5 semantic feature is refined with AIFI, P3 is enhanced through cross-scale deformable attention, and the coarse pose head predicts boxes and the two keypoints. The local refiner is then applied only to the highest-confidence candidates, after which the refined \texttt{pelvis\_ground} is projected and evaluated through LocSim. The resulting system therefore remains close to one-stage inference, with only a lightweight top-$K$ residual correction step added at the end.
+
+\begin{algorithm}[t]
+\caption{Training and Inference of CLEAR}
+\label{alg:clear}
+\begin{algorithmic}[1]
+\Require Training set $\mathcal{D}_{train}$, validation set $\mathcal{D}_{val}$, pretrained YOLO26x-Pose weights $\theta_0$
+\Ensure Final model parameters $\theta^{\star}$
+\State Initialize Stage-1 model with AIFI@P5 and P3 cross-scale deformable attention from $\theta_0$
+\For{epoch $=1$ to $E_1$}
+    \For{mini-batch $(I, Y)$ in $\mathcal{D}_{train}$}
+        \State Compute pyramid features $(F_3,F_4,F_5)$
+        \State Refine P5 with AIFI to obtain $\bar{F}_5$
+        \State Enhance P3 with cross-scale deformable attention to obtain $\bar{F}_3$
+        \State Predict coarse boxes and keypoints with pose head
+        \State Optimize the Stage-1 objective $\mathcal{L}_{base}$
+    \EndFor
+\EndFor
+\State Select best Stage-1 checkpoint on $\mathcal{D}_{val}$
+\State Initialize Stage-2 model from the best Stage-1 checkpoint and add local keypoint refiner
+\For{epoch $=1$ to $E_2$}
+    \For{mini-batch $(I, Y)$ in $\mathcal{D}_{train}$}
+        \State Compute coarse predictions as in Stage 1
+        \State Select top-$K$ candidate detections by confidence
+        \State Sample local P3 evidence and predict residual keypoint corrections
+        \State Optimize the Stage-2 objective $\mathcal{L}_{base}+\lambda_{ref}\mathcal{L}_{ref}$
+    \EndFor
+\EndFor
+\State Select final checkpoint $\theta^{\star}$ on $\mathcal{D}_{val}$
+\Statex
+\Statex \textbf{Inference with $\theta^{\star}$:}
+\State Given image $I$, compute $(F_3,F_4,F_5)$, then $\bar{F}_5$ and $\bar{F}_3$
+\State Predict coarse detections and two keypoints per player
+\State Apply local refinement to top-$K$ candidates
+\State Project refined \texttt{pelvis\_ground} to the pitch and output final detections
+\end{algorithmic}
+\end{algorithm}
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Experimental Setup}
+\label{sec:exp-setup}
+
+We evaluate CLEAR under the SynLoc protocol described in \Cref{sec:problem-baseline}. All methods use the same fixed input resolution of 960 and the same keypoint-based projection evaluator. This shared protocol is essential because the benchmark is unusually sensitive to data preprocessing. A change in input resolution or projection handling can easily affect the final localization score, making fair comparisons difficult unless the setup is carefully controlled.
+
+We report the full LocSim evaluation suite. The primary metric is mAP-LocSim over thresholds 0.50:0.05:0.95. We also report precision, recall, and F1 at LocSim$=0.5$ using the validation-derived score threshold, together with frame accuracy. These metrics serve different purposes. mAP-LocSim summarizes the overall localization-quality tradeoff, precision exposes the cost of false positive players, recall reflects the recovery of difficult or occluded athletes, and frame accuracy measures whole-frame completeness under a fixed operating point.
+
+\subsection{Implementation Details}
+\label{sec:implementation}
+
+The plain YOLO26x-Pose baseline is trained from the pretrained \texttt{yolo26x-pose.pt} checkpoint using the two-keypoint configuration and the training schedule in our local script. The baseline uses image size 960, batch size 64, MuSGD, pose loss gain 18.0, keypoint objectness gain 2.0, mosaic 0.2, translation 0.03, scale 0.2, rectangular training, and mixed precision. This configuration already provides a strong one-stage pose baseline and converges faster than the older oversized baseline.
+
+CLEAR is trained in two stages. In Stage 1, we train the semantic disambiguation and cross-scale enhancement modules jointly with the coarse pose head for 20 epochs using batch size 48, MuSGD, initial learning rate 0.01, final learning-rate ratio 0.1, patience 5, keypoint-1 weight 2.0, and the same augmentation family as the baseline. In Stage 2, we initialize from the best Stage-1 checkpoint, add the local keypoint refiner, and train for another 20 epochs with a reduced initial learning rate of 0.0005, refine gain 0.5, and geometric-prior gain 0.1. Out-of-bounds supervision is enabled throughout to preserve the geometric fidelity of the ground-contact keypoint.
+
+The test protocol is equally strict. We first run validation to obtain the operating score threshold, then evaluate the model on the test split using the same LocSim evaluator and keypoint index for projection. This prevents threshold tuning on the test set and keeps the comparison fair across all variants.
+
+\subsection{Quantitative Results}
+\label{sec:quantitative}
+
+\begin{table}[t]
+    \centering
+    \setlength{\tabcolsep}{7pt}
+    \caption{Quantitative comparisons on the SynLoc test set under LocSim evaluation. Higher is better for all metrics. Best, second, and third results are highlighted with \textcolor{red}{red}, \textcolor{orange}{orange}, and \textcolor{yellow}{yellow} backgrounds, respectively. The lower part of the table is also a progressive ablation of CLEAR.}
+    \label{tab:locsim_main_results}
+    \begin{tabular}{lccccc}
+        \toprule
+        Method & mAP-LocSim $\uparrow$ & Precision $\uparrow$ & Recall $\uparrow$ & F1 $\uparrow$ & Frame Accuracy $\uparrow$ \\
+        \midrule
+        Baseline (SSKIT) & 76.2\% & 92.8\% & \cellcolor{yellow!35}82.0\% & \cellcolor{yellow!35}90.9\% & 31.6\% \\
+        YOLO26x-Pose & 71.3\% & 92.3\% & 83.0\% & 87.6\% & 33.5\% \\
+        \midrule
+        Semantic Disambiguation & \cellcolor{yellow!35}78.3\% & \cellcolor{red!25}94.3\% & \cellcolor{orange!35}87.0\% & 90.5\% & \cellcolor{yellow!35}46.5\% \\
+        + Cross-Scale Enhancement & \cellcolor{orange!35}81.5\% & \cellcolor{orange!35}93.1\% & \cellcolor{red!25}93.0\% & \cellcolor{red!25}93.1\% & \cellcolor{orange!35}48.1\% \\
+        + Local Keypoint Refinement & \cellcolor{red!25}82.2\% & \cellcolor{yellow!35}93.0\% & \cellcolor{red!25}93.0\% & \cellcolor{orange!35}93.0\% & \cellcolor{red!25}50.7\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\Cref{tab:locsim_main_results} supports two high-level observations. First, strong generic one-stage pose estimation is not sufficient for SynLoc-style localization. Plain YOLO26x-Pose is a strong baseline in conventional pose terms, but here it reaches only 71.3\% mAP-LocSim and 33.5\% frame accuracy. These values are lower than the official SSKIT baseline in mAP-LocSim and only slightly stronger in frame accuracy. This result is important because it shows that architectural modernization alone does not solve the benchmark. The remaining gap lies in the mismatch between standard pose learning and projection-sensitive localization.
+
+Second, the CLEAR ablation sequence matches the method hypothesis closely. Adding semantic disambiguation improves mAP-LocSim from 71.3\% to 78.3\% and raises frame accuracy from 33.5\% to 46.5\%, while also producing the highest precision, 94.3\%. This pattern indicates that the P5 context module mainly suppresses false positive players. In crowded scenes, global context helps the model reject locally plausible but globally inconsistent responses, which improves reliability before any fine localization is corrected.
+
+The next gain comes from cross-scale enhancement. The \emph{+ Cross-Scale Enhancement} variant raises mAP-LocSim to 81.5\%, recall to 93.0\%, and F1 to 93.1\%. The strongest changes appear in recall and F1, which is exactly what one would expect if the module mainly recovers difficult players that were previously missed. The improvement is therefore consistent with the intended role of P3 cross-scale deformable attention: preserve weak athlete evidence and rescue small or partially occluded instances before coarse prediction collapses.
+
+The final stage, \emph{+ Local Keypoint Refinement}, further improves mAP-LocSim to 82.2\% and frame accuracy to 50.7\%. Importantly, recall remains unchanged at 93.0\%, and F1 changes only slightly. This means that the last gain is not driven by more detections, but by better localization of already detected players. The local refiner behaves as intended: it primarily reduces localization error, especially on the projected \texttt{pelvis\_ground} point that determines the final evaluator score.
+
+The table is therefore informative both as a comparison table and as an ablation study. The three modules do not compete with one another; they address different failure categories and deliver complementary gains. Semantic context mainly reduces false positives, cross-scale enhancement mainly improves recovery of difficult players, and residual refinement mainly improves localization accuracy after detection. This is the main empirical justification for the CLEAR design.
+
+\subsection{Further Discussion of Metric Behavior}
+\label{sec:metric-discussion}
+
+It is useful to interpret the metrics together rather than in isolation. Precision is especially sensitive to false positive players, and the strongest precision result appears immediately after semantic disambiguation is introduced. Recall is most sensitive to missed players, and its largest jump appears when cross-scale enhancement is added. mAP-LocSim and frame accuracy, by contrast, reflect both detection completeness and localization quality, which is why they continue to improve after local refinement even when recall no longer changes.
+
+Frame accuracy deserves special attention. The jump from 33.5\% for YOLO26x-Pose to 50.7\% for full CLEAR is much larger in relative terms than the change in mAP-LocSim. This is meaningful for practical soccer analytics. A system that recovers most players on average may still fail operationally if a moderate fraction of frames remain incomplete. The frame-accuracy gain suggests that CLEAR is not only better on average, but also more stable on difficult crowded frames.
+
+The comparison to the official SSKIT baseline is also revealing. The benchmark baseline remains competitive and is stronger than plain YOLO26x-Pose in mAP-LocSim, which confirms that the task is not solved simply by switching to a more recent pose backbone. The full CLEAR model surpasses both references only after the architecture is explicitly aligned with the task-level failure categories. This is precisely the design argument of the paper.
+
+\subsection{Qualitative Results}
+\label{sec:qualitative}
+
+\begin{figure*}[t]
+    \centering
+    \IfFileExists{quality.png}{
+        \includegraphics[width=\textwidth]{quality.png}
+    }{
+        \IfFileExists{qulity.png}{
+            \includegraphics[width=\textwidth]{qulity.png}
+        }{
+            \fbox{\rule{0pt}{2.0in}\rule{0.95\textwidth}{0pt}}
+        }
+    }
+    \caption{Qualitative comparison between the baseline and CLEAR on the three target failure categories. The figure highlights (a) occluded players that are missed by the baseline but recovered by CLEAR, (b) localization error cases where CLEAR places \texttt{pelvis\_ground} more accurately, and (c) false positive players that are suppressed after CLEAR introduces stronger contextual disambiguation.}
+    \label{fig:qualitative}
+\end{figure*}
+
+The qualitative comparison in \Cref{fig:qualitative} reflects the same decomposition as the quantitative results. In the \emph{occluded player} cases, the baseline often fails to assemble a stable person instance when nearby athletes overlap heavily. CLEAR performs better because semantic context and cross-scale support preserve enough evidence for the detector to keep the player hypothesis alive. These examples are visually consistent with the recall gains observed after cross-scale enhancement.
+
+In the \emph{localization error} cases, both methods may detect the same player, but the baseline places the final \texttt{pelvis\_ground} away from the correct foot-contact region. CLEAR improves these examples through local residual correction. The effect is sometimes visually small in image space, but decisive after projection to the pitch. These cases explain why the last stage improves mAP-LocSim and frame accuracy more than it improves recall.
+
+In the \emph{false positive player} cases, the baseline responds to clutter or mixed evidence from adjacent players as if it were a real athlete. CLEAR suppresses these cases more effectively, which matches the strong precision gain obtained by the semantic disambiguation module. Overall, the qualitative figure shows that the full method improves behavior for exactly the three failure categories used to motivate the design.
+
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+This paper addresses the problem of single-frame world-coordinate athlete localization in crowded soccer scenes. The central argument is that this task is not solved by conventional pose quality alone, because the final evaluator depends directly on the projected \texttt{pelvis\_ground} position. We therefore proposed CLEAR, a localization-oriented extension of YOLO26x-Pose that combines global semantic disambiguation at P5, cross-scale deformable enhancement at P3, and metric-aligned local keypoint refinement at the output stage.
+
+The evidence supports this design clearly. Plain YOLO26x-Pose provides a strong one-stage starting point, but it remains insufficient under LocSim evaluation. The full CLEAR model reaches 82.2\% mAP-LocSim and 50.7\% frame accuracy on the SynLoc test set, outperforming both the official SSKIT baseline and the plain YOLO26x-Pose reference. More importantly, the ablation pattern matches the intended behavior of the modules: semantic disambiguation improves resistance to false positive clutter, cross-scale enhancement improves the recovery of difficult and occluded players, and local refinement reduces projection-sensitive localization error.
+
+The current scope of the work is still bounded. CLEAR is designed for single-frame localization under a fixed-resolution protocol and does not exploit temporal information across neighboring frames. In realistic broadcast deployments, temporal reasoning could further stabilize detections under occlusion and improve continuity across difficult frames. Another promising direction is to study the interaction between calibration confidence and player localization confidence, since projection-sensitive errors may be reduced further when these two sources of uncertainty are modeled jointly. We believe that these directions offer a natural extension of the problem-driven design introduced in this paper.
+
+\section*{Acknowledgements}
+The authors gratefully acknowledge GPT-5.4 for assistance with LaTeX typesetting, table preparation, and manuscript grammar revision; Codex-5.4 and Claude Opus 4.6 for support in code debugging and implementation refinement; and draw.io for assistance in figure preparation.
+
+\bibliographystyle{splncs04}
+\bibliography{references}
+
+\end{document}

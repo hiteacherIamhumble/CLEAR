@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -973,9 +974,9 @@ class Pose26MLPRefine(Pose26):
         super().__init__(nc, kpt_shape, reg_max, end2end, ch)
         self.refine_enabled = True
         self.mlp_refine_enabled = True
-        self.refine_topk_train = 768
-        self.refine_topk_eval = 300
-        self.refine_hidden = 128
+        self.refine_topk_train = int(os.getenv("POSE26_MLP_REFINE_TOPK_TRAIN", "768"))
+        self.refine_topk_eval = int(os.getenv("POSE26_MLP_REFINE_TOPK_EVAL", "300"))
+        self.refine_hidden = int(os.getenv("POSE26_MLP_REFINE_HIDDEN", "128"))
 
         in_dim = ch[0] + 2  # local P3 feature + relative grid coordinate
         self.refine_mlp = nn.Sequential(

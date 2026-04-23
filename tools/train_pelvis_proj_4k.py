@@ -51,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--perspective", type=float, default=0.0, help="Perspective augmentation")
     p.add_argument("--degrees", type=float, default=0.0, help="Rotation augmentation")
     p.add_argument("--close-mosaic", type=int, default=5, help="Disable mosaic in final N epochs")
+    p.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every N epochs; disabled if < 1")
+    p.add_argument("--resume", type=str, default="", help="Optional checkpoint path to resume training from")
     p.add_argument(
         "--allow-oob-labels",
         action=argparse.BooleanOptionalAction,
@@ -88,10 +90,13 @@ def main() -> None:
     model_path = Path(args.model)
     data_path = Path(args.data)
     init_weights = Path(args.init_weights) if args.init_weights else None
+    resume_ckpt = Path(args.resume) if args.resume else None
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
     if init_weights is not None and not init_weights.exists():
         raise FileNotFoundError(f"Init weights not found: {init_weights}")
+    if resume_ckpt is not None and not resume_ckpt.exists():
+        raise FileNotFoundError(f"Resume checkpoint not found: {resume_ckpt}")
     if not data_path.exists():
         raise FileNotFoundError(f"Data YAML not found: {data_path}")
 
@@ -132,6 +137,8 @@ def main() -> None:
         degrees=args.degrees,
         freeze=args.freeze if args.freeze > 0 else None,
         close_mosaic=args.close_mosaic,
+        save_period=args.save_period,
+        resume=str(resume_ckpt) if resume_ckpt is not None else None,
         plots=True,
     )
 

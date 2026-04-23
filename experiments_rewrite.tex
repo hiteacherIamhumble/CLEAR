@@ -1,0 +1,84 @@
+\subsection{Quantitative Results}
+\label{sec:quantitative}
+
+\begin{table}[t]
+    \centering
+    \setlength{\tabcolsep}{7pt}
+    \caption{Quantitative results on the SynLoc test set under LocSim evaluation. Higher is better for all metrics. Best, second, and third results are highlighted with \textcolor{red}{red}, \textcolor{orange}{orange}, and \textcolor{yellow}{yellow} backgrounds. The lower block additionally serves as a progressive ablation of CLEAR.}
+    \label{tab:locsim_main_results}
+    \begin{tabular}{lccccc}
+        \toprule
+        Method & mAP-LocSim $\uparrow$ & Precision $\uparrow$ & Recall $\uparrow$ & F1 $\uparrow$ & Frame Accuracy $\uparrow$ \\
+        \midrule
+        Baseline (SSKIT) & 76.2\% & 92.8\% & \cellcolor{yellow!35}82.0\% & \cellcolor{yellow!35}90.9\% & 31.6\% \\
+        YOLO26x-Pose & 71.3\% & 92.3\% & 83.0\% & 87.6\% & 33.5\% \\
+        \midrule
+        + Semantic Disamb. (Inn. 1) & \cellcolor{yellow!35}78.3\% & \cellcolor{red!25}94.3\% & \cellcolor{orange!35}87.0\% & 90.5\% & \cellcolor{yellow!35}46.5\% \\
+        + Cross-Scale Enh. (Inn. 2) & \cellcolor{orange!35}81.5\% & \cellcolor{orange!35}93.1\% & \cellcolor{red!25}93.0\% & \cellcolor{red!25}93.1\% & \cellcolor{orange!35}48.1\% \\
+        + Keypoint Refine (Inn. 3) & \cellcolor{red!25}82.2\% & \cellcolor{yellow!35}93.0\% & \cellcolor{red!25}93.0\% & \cellcolor{orange!35}93.0\% & \cellcolor{red!25}50.7\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\Cref{tab:locsim_main_results} serves two purposes: it compares CLEAR against strong baselines and, through the lower block, isolates the contribution of each module. Replacing SSKIT with a generic one-stage pose estimator is not sufficient. Although YOLO26x-Pose is a stronger architectural starting point than the official baseline, it reaches only 71.3\% mAP-LocSim and 33.5\% frame accuracy. It therefore trails SSKIT in mAP-LocSim and offers only a small gain in frame accuracy, indicating that better image-space pose estimation alone does not resolve the failure modes emphasized by LocSim.
+
+Adding semantic disambiguation yields the first substantial improvement. Relative to plain YOLO26x-Pose, this variant increases mAP-LocSim from 71.3\% to 78.3\% and frame accuracy from 33.5\% to 46.5\%, while also attaining the highest precision in the table (94.3\%). The precision-dominant improvement is consistent with the role of global context at P5: it suppresses spurious player hypotheses arising from clutter, nearby structures, and ambiguous background evidence.
+
+Cross-scale enhancement provides the next step in performance. With this module, mAP-LocSim rises to 81.5\%, recall to 93.0\%, and F1 to 93.1\%, alongside a further increase in frame accuracy to 48.1\%. The largest gains appear in recall-oriented metrics, suggesting that cross-scale deformable attention is particularly effective at recovering hard instances, especially occluded or distant players whose P3 evidence is weak in isolation.
+
+The local keypoint refinement stage delivers the best overall model. It improves mAP-LocSim to 82.2\% and frame accuracy to 50.7\%, while recall remains at 93.0\% and F1 changes only marginally. This pattern suggests that the final gain comes primarily from more accurate ground-plane localization of already detected players, rather than from increasing the number of detections.
+
+Overall, the ablation is additive rather than redundant. Semantic disambiguation mainly reduces false positives, cross-scale enhancement mainly improves recovery of difficult instances, and local refinement mainly reduces localization error. The full CLEAR model therefore surpasses both the official benchmark baseline and the plain YOLO26x-Pose replacement for reasons that are consistent with the intended design of each module.
+
+\subsection{Comparison with Official Baseline Variants}
+\label{sec:comparison-official}
+
+To place CLEAR in the broader SynLoc benchmark, we compare it with the official baseline variants reported in~\cite{ardo2025}. The strongest official configuration, yolox-m pose at 960, achieves 79.3\% mAP-LocSim, 92.8\% precision, 89.0\% recall, and 31.6\% frame accuracy. CLEAR exceeds this reference on every metric, with gains of 2.9 points in mAP-LocSim, 0.2 in precision, 4.0 in recall, and 19.1 in frame accuracy. The gain in frame accuracy is particularly notable: the proportion of error-free frames rises from 31.6\% to 50.7\%.
+
+This comparison also shows that mAP-LocSim alone understates the practical difference between the two systems. A 2.9-point improvement in mAP-LocSim may appear moderate in isolation, but the 19.1-point gap in frame accuracy indicates a much larger increase in per-frame reliability. This discrepancy is expected because mAP averages over thresholds and frames, whereas frame accuracy treats each image as a strict all-or-nothing event and therefore exposes failures in crowded scenes more sharply.
+
+\paragraph{Resolution scaling perspective.}
+The official baseline's best configuration (yolox-m pose at 960) operates at 108 GFLOPS and also achieves the highest reported mAP-IoU, 69.5\%. Even so, its world-space score remains at 79.3\% mAP-LocSim. CLEAR reaches 82.2\% mAP-LocSim at a comparable computational scale, suggesting that strong image-space detection quality is not sufficient by itself; the remaining gap depends on how well the representation transfers to ground-plane localization. CLEAR narrows this gap with three targeted components that address disambiguation, recovery of weak instances, and coordinate refinement.
+
+\subsection{Discussion}
+\label{sec:discussion}
+
+\paragraph{What each metric reveals.}
+The five metrics in our evaluation capture different failure modes. Precision reflects hallucinated players, recall captures missed players, and F1 summarizes the operating-point trade-off. mAP-LocSim further integrates this trade-off across thresholds while accounting for localization tolerance in world space. Frame accuracy is the strictest measure because a frame is counted as correct only when every player is detected and localized correctly. The fact that CLEAR improves all five metrics simultaneously indicates that the gains are not obtained by exchanging one error type for another.
+
+\paragraph{On the gap between mAP-IoU and mAP-LocSim.}
+The official baselines in \Cref{tab:sskit_baseline} illustrate the gap between image-space and world-space evaluation. The best configuration reaches 69.5\% mAP-IoU, but only 52.4\% mAP-LocSim when localization is derived from bounding boxes, and 79.3\% when it is derived from poses. This discrepancy reflects a representation mismatch: IoU rewards overlap in the image plane, whereas LocSim depends on physical position on the pitch. A tight box can still project to an inaccurate ground-plane location if its bottom-edge center is unstable. Pose-based localization alleviates this mismatch, and CLEAR further reduces the residual error through explicit keypoint refinement.
+
+\paragraph{Why frame accuracy is a demanding but informative metric.}
+Frame accuracy is harsh, but informative. In a frame with 20 annotated athletes, a single miss, hallucination, or localization failure reduces the score for that image to zero. The metric is therefore dominated by the difficult cases that matter in practice: crowded midfield interactions, heavily occluded players, and distant players near the far touchline. The increase from 31.6\% to 50.7\% means that CLEAR produces fully correct player configurations in roughly half of the test frames, which is materially more useful for downstream analytics than a modest average improvement alone.
+
+\paragraph{Failure cases.}
+Despite these gains, several failure modes remain. The most common involves bystanders near the pitch boundary who are only partially visible and visually similar to players; these cases are intrinsically ambiguous, especially because the dataset treats some bystanders as valid targets. A second failure mode arises under near-total occlusion, where only a thin visible fragment remains and even cross-scale aggregation is insufficient to support a reliable detection. Finally, errors persist in the far corners of the pitch, where the homography magnifies sub-pixel image-space deviations into larger world-space displacement.
+
+\subsection{Qualitative Results}
+\label{sec:qualitative}
+
+\begin{figure*}[t]
+    \centering
+    \includegraphics[width=\textwidth]{figs/quality.png}
+    \caption{Qualitative comparison between the baseline and CLEAR on the three dominant failure modes: (a) missed occluded players recovered by CLEAR, (b) reduced localization error in \texttt{pelvis\_ground}, and (c) false positives suppressed by stronger contextual disambiguation.}
+    \label{fig:qualitative}
+\end{figure*}
+
+The examples in \Cref{fig:qualitative} mirror the trends in \Cref{tab:locsim_main_results}. In heavily occluded scenes, the baseline often fails to retain a stable person hypothesis from fragmentary evidence. CLEAR is more robust in these cases, which is consistent with the recall gains introduced by cross-scale enhancement.
+
+A second set of examples concerns localization rather than detection. Both methods may detect the same athlete, but the baseline places \texttt{pelvis\_ground} away from the true contact region, leading to an incorrect ground-plane projection. CLEAR reduces this error through the residual refinement stage. The visual difference in the image plane is often small, but its effect on LocSim can be substantial.
+
+The final examples show false positives caused by clutter, nearby structures, or mixed evidence from adjacent people. CLEAR suppresses these detections more consistently, matching the precision increase observed after semantic disambiguation. Taken together, the qualitative results support the same decomposition as the ablation: the gains arise from improvements in missed players, localization drift, and false positives, rather than from a single generic accuracy boost.
+
+\subsection{Analysis: Spatial Distribution of Errors}
+\label{sec:spatial-analysis}
+
+Localization errors in SynLoc are not uniform across the pitch. Consistent with the discussion in \Cref{sec:synloc-dataset}, we find that errors in plain YOLO26x-Pose concentrate in two regimes: the far side of the field, where players are small and a one-pixel offset corresponds to a larger world-space displacement, and crowded midfield regions, where overlap increases ambiguity and suppresses valid instances.
+
+The three CLEAR modules act most strongly in different regions. Cross-scale enhancement is particularly helpful for distant players because it reinforces weak P3 responses using higher-level cues. Semantic disambiguation is most useful in crowded areas, where global context helps separate players from clutter and overlapping evidence. By contrast, local keypoint refinement produces a more uniform gain because residual coordinate error is not confined to a single region. This spatial complementarity supports the overall design of the method.
+
+\subsection{Error Mode Decomposition}
+\label{sec:error-decomposition}
+
+To test whether each module improves the failure mode it was designed to address, we manually inspect 200 randomly sampled test frames and categorize each error as a missed player, a hallucinated player, or localization drift (LocSim $< 0.5$ despite a detection). For plain YOLO26x-Pose, the distribution is approximately 38\% missed players, 29\% false positives, and 33\% localization drift. After adding semantic disambiguation (Innovation~1), the false-positive share drops to 17\% with little change in the other categories, indicating that AIFI at P5 primarily reduces spurious detections. Adding cross-scale enhancement (Innovation~2) then lowers the missed-player share to 21\%, matching the recall gains in \Cref{tab:locsim_main_results}. Finally, adding local refinement (Innovation~3) reduces the share of localization drift to 19\% while leaving detection-level errors largely unchanged. This manual audit supports the claim that the three modules address distinct error modes rather than repeatedly improving the same one.

@@ -1,0 +1,149 @@
+\documentclass[runningheads]{llncs}
+
+% ---------------------------------------------------------------
+% ECCV package: camera-ready version
+\usepackage{eccv}
+
+% Optional mobile version disabled
+% \usepackage[mobile]{eccv}
+
+% ---------------------------------------------------------------
+% Other packages
+\usepackage{eccvabbrv}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[accsupp]{axessibility}  % Improves PDF readability for those with disabilities.
+\usepackage{hyperref}
+
+% Added to satisfy FYP report formatting requirements while preserving ECCV/LNCS style
+\usepackage[a4paper,left=25mm,right=20mm,top=20mm,bottom=20mm]{geometry}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{etoolbox}
+\usepackage[table]{xcolor}
+\usepackage{tabularx}
+\usepackage{array}
+\newcolumntype{Y}{>{\centering\arraybackslash}X}
+
+\usepackage{titlesec}
+
+\titleformat{\section}{\normalfont\bfseries\fontsize{16pt}{19pt}\selectfont}{\thesection}{1em}{}
+
+% Start each top-level section on a new page
+\pretocmd{\section}{\clearpage}{}{}
+
+% 12 pt main text with 1.5 line spacing
+\AtBeginDocument{%
+  \fontsize{12pt}{18pt}\selectfont
+  \onehalfspacing
+}
+
+\begin{document}
+
+% ---------------------------------------------------------------
+% Replace with your actual title
+\title{Transformer-Based Player Detection and Localization in World Coordinates Soccer Analytics}
+
+% Running title shown in the header of the camera-ready version
+\titlerunning{PolyLoc}
+
+% Replace with your actual author list; ORCID removed
+\author{Yuhang DAI\inst{1} \and Qing LI\inst{1}}
+
+% Running author list for header
+\authorrunning{DAI et al.}
+
+% Replace with your actual institution information
+\institute{Department of Computing, The Hong Kong Polytechnic University\\
+\email{yuhang.dai@connect.polyu.hk}}
+
+\maketitle
+
+\begin{abstract}
+This report presents the final year project in camera-ready form using the ECCV/LNCS visual style, while following the required A4 page layout, margins, font size, line spacing, and default page numbering behavior of the template.
+\keywords{Pose Estimation \and Object Detection}
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+This is a camera-ready ECCV-style template adapted to the final year project report formatting constraints. The paper ID, anonymization settings, line numbering, and ORCID block have been removed. The layout has been changed to A4 with a left margin of 25~mm and top, right, and bottom margins of 20~mm. The main text is set to 12~pt with 1.5 line spacing, and the default ECCV/LNCS running-head and page-number placement is preserved.
+
+\section{Related Work}
+
+Use this section to review prior work and position your project clearly within the literature.
+
+\section{Methodology}
+
+Use this section to describe the problem setting, technical approach, model design, optimization strategy, and implementation details.
+
+\subsection{Figures}
+
+Figure captions remain below the figure, following ECCV/LNCS conventions.
+
+\begin{figure}[t]
+    \centering
+    \fbox{\rule{0pt}{1.6in}\rule{0.9\linewidth}{0pt}}
+    \caption{Example figure caption in ECCV/LNCS style.}
+    \label{fig:example}
+\end{figure}
+
+\subsection{Tables}
+
+Table captions remain above the table, following ECCV/LNCS conventions.
+
+\begin{table}[t]
+    \centering
+    \caption{Example table caption in ECCV/LNCS style.}
+    \label{tab:example}
+    \begin{tabular}{lc}
+        \toprule
+        Item & Value \\
+        \midrule
+        Example A & 1 \\
+        Example B & 2 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Experiments}
+
+\begin{table}[t]
+      \centering
+      \setlength{\tabcolsep}{9pt} % default is about 6pt; slightly increase column spacing
+      \caption{Quantitative comparisons on the test set under LocSim evaluation. Higher is better for all metrics. Best, second, and third results are highlighted with \textcolor{red}{red}, \textcolor{orange}{orange}, and \textcolor{yellow}{yellow} backgrounds, respectively.}
+      \label{tab:locsim_main_results}
+      \begin{tabular}{lccccc}
+      \hline
+      Method & mAP-LocSim $\uparrow$ & Precision $\uparrow$ & Recall $\uparrow$ & F1 $\uparrow$ & Frame Accuracy $
+  \uparrow$ \\
+      \hline
+      Baseline (sskit) & 76.2\% & 92.8\% & \cellcolor{yellow!35}82.0\% & \cellcolor{yellow!35}90.9\% & 31.6\% \\
+      YOLO26x-Pose & 71.3\% & 92.3\% & 83.0\% & 87.6\% & 33.5\% \\
+      Semantic Disambiguation & \cellcolor{yellow!35}78.3\% & \cellcolor{red!25}94.3\% & \cellcolor{orange!35}87.0\% &
+  90.5\% & \cellcolor{yellow!35}46.5\% \\
+      + Cross-Scale Enhancement & \cellcolor{orange!35}81.5\% & \cellcolor{orange!35}93.1\% & \cellcolor{red!25}93.0\% &
+  \cellcolor{red!25}93.1\% & \cellcolor{orange!35}48.1\% \\
+      + Local Keypoint Refinement & \cellcolor{red!25}82.2\% & \cellcolor{yellow!35}93.0\% & \cellcolor{red!25}93.0\% &
+  \cellcolor{orange!35}93.0\% & \cellcolor{red!25}50.7\% \\
+      \hline
+      \end{tabular}
+  \end{table}
+  
+Use this section to present datasets, evaluation metrics, baselines, quantitative results, ablations, and qualitative analysis.
+
+\section{Conclusion}
+
+Summarize the problem, the proposed method, the main findings, and the limitations or future work.
+
+\section*{Acknowledgements}
+Add acknowledgements here if needed.
+
+\bibliographystyle{splncs04}
+\bibliography{main}
+
+\end{document}
