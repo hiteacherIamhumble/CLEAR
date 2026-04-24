@@ -52,13 +52,13 @@ Common environment overrides:
 
 ```bash
 TRAIN_DEVICE=1 \
-EVAL_DEVICE=1 \
-BATCH=48 \
-IMGSZ=960 \
-STAGE1_EPOCHS=20 \
-STAGE2_EPOCHS=20 \
-LOCSIM_SPLIT=test \
-bash tools/run_stage1_stage2_locsim_strict.sh
+  EVAL_DEVICE=1 \
+  BATCH=48 \
+  IMGSZ=960 \
+  STAGE1_EPOCHS=20 \
+  STAGE2_EPOCHS=20 \
+  LOCSIM_SPLIT=test \
+  bash tools/run_stage1_stage2_locsim_strict.sh
 ```
 
 Main outputs:
