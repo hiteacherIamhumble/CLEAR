@@ -95,7 +95,6 @@ Important detail:
 - `train` is standard YOLO image + label training data.
 - `val` and `test` also have COCO-style annotation JSONs for BEV evaluation.
 
-
 ## 2A. Full Two-Stage Training Flow
 
 If you want the full training story, the main orchestration script is also:
@@ -240,7 +239,6 @@ You can think of the two stages like this:
 
 - Stage 1 teaches the network to produce a stronger coarse bbox + 2-keypoint prediction using the improved AIFI + cross-scale-attention architecture.
 - Stage 2 starts from that Stage 1 solution and adds a lightweight local correction module to refine keypoint coordinates, especially the BEV-critical `pelvis_ground` point.
-
 
 ## 3. What Is Actually Input to the Model?
 
