@@ -503,7 +503,9 @@ class Mosaic(BaseMixTransform):
         self.border = (-imgsz // 2, -imgsz // 2)  # width, height
         self.n = n
         self.buffer_enabled = self.dataset.cache != "ram"
-        self.allow_oob_labels = bool(self.dataset.data.get("allow_oob_labels", self.dataset.data.get("allow_oob_keypoints", False)))
+        self.allow_oob_labels = bool(
+            self.dataset.data.get("allow_oob_labels", self.dataset.data.get("allow_oob_keypoints", False))
+        )
 
     def get_indexes(self):
         """Return a list of random indexes from the dataset for mosaic augmentation.
