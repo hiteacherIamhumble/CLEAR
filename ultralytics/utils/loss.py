@@ -1026,13 +1026,18 @@ class PoseLoss26Refine(PoseLoss26):
             if fg_mask.any():
                 keypoints = batch["keypoints"].to(self.device).float().clone()
                 imgsz = (
-                    torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=refine_pred.dtype) * self.stride[0]
+                    torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=refine_pred.dtype)
+                    * self.stride[0]
                 )
                 keypoints[..., 0] *= imgsz[1]
                 keypoints[..., 1] *= imgsz[0]
 
-                selected_gt = self._select_target_keypoints(keypoints, batch["batch_idx"].view(-1, 1), target_gt_idx, fg_mask)
-                gather_idx = refine_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], selected_gt.shape[-1])
+                selected_gt = self._select_target_keypoints(
+                    keypoints, batch["batch_idx"].view(-1, 1), target_gt_idx, fg_mask
+                )
+                gather_idx = (
+                    refine_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], selected_gt.shape[-1])
+                )
                 gt_ref = selected_gt.gather(1, gather_idx)
 
                 fg_ref = fg_mask.gather(1, refine_idx)
@@ -1098,13 +1103,18 @@ class PoseLoss26MLPRefine(PoseLoss26):
             if fg_mask.any():
                 keypoints = batch["keypoints"].to(self.device).float().clone()
                 imgsz = (
-                    torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=refine_pred.dtype) * self.stride[0]
+                    torch.tensor(preds["feats"][0].shape[2:], device=self.device, dtype=refine_pred.dtype)
+                    * self.stride[0]
                 )
                 keypoints[..., 0] *= imgsz[1]
                 keypoints[..., 1] *= imgsz[0]
 
-                selected_gt = self._select_target_keypoints(keypoints, batch["batch_idx"].view(-1, 1), target_gt_idx, fg_mask)
-                gather_idx = refine_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], selected_gt.shape[-1])
+                selected_gt = self._select_target_keypoints(
+                    keypoints, batch["batch_idx"].view(-1, 1), target_gt_idx, fg_mask
+                )
+                gather_idx = (
+                    refine_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.kpt_shape[0], selected_gt.shape[-1])
+                )
                 gt_ref = selected_gt.gather(1, gather_idx)
 
                 fg_ref = fg_mask.gather(1, refine_idx)
