@@ -58,19 +58,31 @@ resolve_ckpt() {
   local run_name="$1"
   local p1="$RUNS_DIR/$run_name/weights/best.pt"
   local p2="$RUNS_DIR/$run_name/weights/last.pt"
-  if [[ -f "$p1" ]]; then echo "$p1"; return 0; fi
-  if [[ -f "$p2" ]]; then echo "$p2"; return 0; fi
+  if [[ -f "$p1" ]]; then
+    echo "$p1"
+    return 0
+  fi
+  if [[ -f "$p2" ]]; then
+    echo "$p2"
+    return 0
+  fi
   local found
   found="$(find "$ROOT" -type f -path "*/${run_name}/weights/best.pt" | head -n 1 || true)"
-  if [[ -n "$found" ]]; then echo "$found"; return 0; fi
+  if [[ -n "$found" ]]; then
+    echo "$found"
+    return 0
+  fi
   found="$(find "$ROOT" -type f -path "*/${run_name}/weights/last.pt" | head -n 1 || true)"
-  if [[ -n "$found" ]]; then echo "$found"; return 0; fi
+  if [[ -n "$found" ]]; then
+    echo "$found"
+    return 0
+  fi
   return 1
 }
 
 preflight_ckpt() {
   local ckpt="$1"
-  python - <<'PY' "$ckpt"
+  python - "$ckpt" << 'PY'
 import sys
 from pathlib import Path
 # Explicit registration to avoid torch.load class errors.
@@ -130,7 +142,7 @@ run_locsim() {
 
 extract_metrics() {
   local d="$1"
-  python - <<'PY' "$d"
+  python - "$d" << 'PY'
 import json, os, sys
 base = sys.argv[1]
 cands = [
@@ -167,17 +179,41 @@ print(json.dumps(out, ensure_ascii=False))
 PY
 }
 
-[[ -f "$BASE_WEIGHTS" ]] || { echo "[ERROR] BASE_WEIGHTS not found: $BASE_WEIGHTS"; exit 2; }
-[[ -f "$MODEL_STAGE1" ]] || { echo "[ERROR] MODEL_STAGE1 not found: $MODEL_STAGE1"; exit 2; }
-[[ -f "$MODEL_STAGE2" ]] || { echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"; exit 2; }
-[[ -f "$DATA_YAML" ]] || { echo "[ERROR] DATA_YAML not found: $DATA_YAML"; exit 2; }
-[[ -f "$LOCSIM_SCRIPT" ]] || { echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"; exit 2; }
-[[ -f "$LOCSIM_DATA" ]] || { echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"; exit 2; }
+[[ -f "$BASE_WEIGHTS" ]] || {
+  echo "[ERROR] BASE_WEIGHTS not found: $BASE_WEIGHTS"
+  exit 2
+}
+[[ -f "$MODEL_STAGE1" ]] || {
+  echo "[ERROR] MODEL_STAGE1 not found: $MODEL_STAGE1"
+  exit 2
+}
+[[ -f "$MODEL_STAGE2" ]] || {
+  echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"
+  exit 2
+}
+[[ -f "$DATA_YAML" ]] || {
+  echo "[ERROR] DATA_YAML not found: $DATA_YAML"
+  exit 2
+}
+[[ -f "$LOCSIM_SCRIPT" ]] || {
+  echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"
+  exit 2
+}
+[[ -f "$LOCSIM_DATA" ]] || {
+  echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"
+  exit 2
+}
 
 ANNOT_DIR="${ANNOT_DIR:-$ROOT/my_database/annotations}"
-[[ -f "$ANNOT_DIR/val.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"; exit 2; }
+[[ -f "$ANNOT_DIR/val.json" ]] || {
+  echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"
+  exit 2
+}
 if [[ "$LOCSIM_SPLIT" == "test" || "$LOCSIM_SPLIT" == "challenge" ]]; then
-  [[ -f "$ANNOT_DIR/test.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"; exit 2; }
+  [[ -f "$ANNOT_DIR/test.json" ]] || {
+    echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"
+    exit 2
+  }
 fi
 
 # ---------------- Stage1 train ----------------
@@ -257,7 +293,7 @@ METRIC1="$(extract_metrics "$LOCSIM1_DIR")"
 LOCSIM2_DIR="$(run_locsim stage2 "$STAGE2_CKPT_FIXED")"
 METRIC2="$(extract_metrics "$LOCSIM2_DIR")"
 
-python - <<'PY' "$SUMMARY_JSON" "$RUN1" "$STAGE1_CKPT_FIXED" "$LOG_STAGE1_TRAIN" "$LOCSIM1_DIR" "$METRIC1" "$RUN2" "$STAGE2_CKPT_FIXED" "$LOG_STAGE2_TRAIN" "$LOCSIM2_DIR" "$METRIC2"
+python - "$SUMMARY_JSON" "$RUN1" "$STAGE1_CKPT_FIXED" "$LOG_STAGE1_TRAIN" "$LOCSIM1_DIR" "$METRIC1" "$RUN2" "$STAGE2_CKPT_FIXED" "$LOG_STAGE2_TRAIN" "$LOCSIM2_DIR" "$METRIC2" << 'PY'
 import json, sys
 (
     out_json,
