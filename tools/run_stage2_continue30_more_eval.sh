@@ -49,7 +49,7 @@ SUMMARY_JSON="$RESULT_DIR/${EXP_PREFIX}_summary.json"
 
 validate_device() {
   local device="$1"
-  python - <<PY "$device"
+  python - "$device" << PY
 import sys
 import torch
 
@@ -77,7 +77,7 @@ PY
 
 preflight_ckpt() {
   local ckpt="$1"
-  python - <<PY "$ckpt"
+  python - "$ckpt" << PY
 import sys
 from pathlib import Path
 from ultralytics.nn.modules.transformer import P3CrossScaleDeformAttn  # noqa: F401
@@ -94,7 +94,7 @@ PY
 
 extract_locsim_stats() {
   local stats_json="$1"
-  python - <<PY "$stats_json"
+  python - "$stats_json" << PY
 import json, sys
 with open(sys.argv[1], 'r', encoding='utf-8') as f:
     d = json.load(f)
@@ -120,9 +120,9 @@ run_eval() {
   local out_log="$LOG_DIR/${EXP_PREFIX}_${tag}_${FINAL_SPLIT}.log"
   mkdir -p "$out_dir"
   POSE26_MLP_REFINE_TOPK_TRAIN="$REFINE_TOPK_TRAIN" \
-  POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
-  POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
-  PYTHONPATH="$ROOT:${PYTHONPATH:-}" python "$LOCSIM_SCRIPT" \
+    POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
+    POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
+    PYTHONPATH="$ROOT:${PYTHONPATH:-}" python "$LOCSIM_SCRIPT" \
     --weights "$ckpt" \
     --data "$LOCSIM_DATA" \
     --split "$FINAL_SPLIT" \
@@ -149,16 +149,37 @@ run_eval() {
 validate_device "$TRAIN_DEVICE"
 validate_device "$EVAL_DEVICE"
 
-[[ -f "$INIT_WEIGHTS" ]] || { echo "[ERROR] INIT_WEIGHTS not found: $INIT_WEIGHTS"; exit 2; }
-[[ -f "$MODEL_STAGE2" ]] || { echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"; exit 2; }
-[[ -f "$DATA_YAML" ]] || { echo "[ERROR] DATA_YAML not found: $DATA_YAML"; exit 2; }
-[[ -f "$LOCSIM_SCRIPT" ]] || { echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"; exit 2; }
-[[ -f "$LOCSIM_DATA" ]] || { echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"; exit 2; }
+[[ -f "$INIT_WEIGHTS" ]] || {
+  echo "[ERROR] INIT_WEIGHTS not found: $INIT_WEIGHTS"
+  exit 2
+}
+[[ -f "$MODEL_STAGE2" ]] || {
+  echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"
+  exit 2
+}
+[[ -f "$DATA_YAML" ]] || {
+  echo "[ERROR] DATA_YAML not found: $DATA_YAML"
+  exit 2
+}
+[[ -f "$LOCSIM_SCRIPT" ]] || {
+  echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"
+  exit 2
+}
+[[ -f "$LOCSIM_DATA" ]] || {
+  echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"
+  exit 2
+}
 
 ANNOT_DIR="${ANNOT_DIR:-$ROOT/my_database/annotations}"
-[[ -f "$ANNOT_DIR/val.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"; exit 2; }
+[[ -f "$ANNOT_DIR/val.json" ]] || {
+  echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"
+  exit 2
+}
 if [[ "$FINAL_SPLIT" == "test" || "$FINAL_SPLIT" == "challenge" ]]; then
-  [[ -f "$ANNOT_DIR/test.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"; exit 2; }
+  [[ -f "$ANNOT_DIR/test.json" ]] || {
+    echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"
+    exit 2
+  }
 fi
 
 preflight_ckpt "$INIT_WEIGHTS"
@@ -166,9 +187,9 @@ echo "[INFO] Continue fine-tune from: $INIT_WEIGHTS"
 echo "[INFO] New run: $RUN_NAME for $MORE_EPOCHS more epochs"
 
 POSE26_MLP_REFINE_TOPK_TRAIN="$REFINE_TOPK_TRAIN" \
-POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
-POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
-python tools/train_pelvis_proj_4k.py \
+  POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
+  POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
+  python tools/train_pelvis_proj_4k.py \
   --model "$MODEL_STAGE2" \
   --init-weights "$INIT_WEIGHTS" \
   --data "$DATA_YAML" \
@@ -206,15 +227,21 @@ if [[ ! -d "$WEIGHTS_DIR" ]]; then
 fi
 BEST_CKPT="$WEIGHTS_DIR/best.pt"
 LAST_CKPT="$WEIGHTS_DIR/last.pt"
-[[ -f "$BEST_CKPT" ]] || { echo "[ERROR] Missing best checkpoint: $BEST_CKPT"; exit 3; }
-[[ -f "$LAST_CKPT" ]] || { echo "[ERROR] Missing last checkpoint: $LAST_CKPT"; exit 3; }
+[[ -f "$BEST_CKPT" ]] || {
+  echo "[ERROR] Missing best checkpoint: $BEST_CKPT"
+  exit 3
+}
+[[ -f "$LAST_CKPT" ]] || {
+  echo "[ERROR] Missing last checkpoint: $LAST_CKPT"
+  exit 3
+}
 preflight_ckpt "$BEST_CKPT"
 preflight_ckpt "$LAST_CKPT"
 
 BEST_INFO="$(run_eval best "$BEST_CKPT")"
 LAST_INFO="$(run_eval last "$LAST_CKPT")"
 
-python - <<PY "$SUMMARY_JSON" "$RUN_NAME" "$INIT_WEIGHTS" "$TRAIN_LOG" "$BEST_CKPT" "$LAST_CKPT" "$BEST_INFO" "$LAST_INFO"
+python - "$SUMMARY_JSON" "$RUN_NAME" "$INIT_WEIGHTS" "$TRAIN_LOG" "$BEST_CKPT" "$LAST_CKPT" "$BEST_INFO" "$LAST_INFO" << PY
 import json, sys
 summary_json, run_name, init_weights, train_log, best_ckpt, last_ckpt, best_info, last_info = sys.argv[1:]
 
