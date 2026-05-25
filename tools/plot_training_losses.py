@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patheffects
 
-
 TRAIN_KEYS = [
     "train/box_loss",
     "train/pose_loss",
@@ -103,11 +102,11 @@ def main():
             raise ValueError("--steps-per-epoch is required when --x step")
         x = epochs * int(args.steps_per_epoch)
         x_label = "Training Step"
-        convergence_label = f"step {int(x[-1] if len(x) == 0 else x[0])}"
+        f"step {int(x[-1] if len(x) == 0 else x[0])}"
     else:
         x = epochs
         x_label = "Epoch"
-        convergence_label = f"epoch {int(epochs[-1])}"
+        f"epoch {int(epochs[-1])}"
 
     train = build_series(rows, TRAIN_KEYS)
     val = build_series(rows, VAL_KEYS)
