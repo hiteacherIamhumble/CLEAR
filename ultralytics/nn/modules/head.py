@@ -867,7 +867,9 @@ class Pose26Refine(Pose26):
         y2 = (y2 * scale).clamp(0, max(feat_h - 1, 0))
 
         roi_boxes = torch.stack((x1, y1, x2, y2), dim=-1).view(bs * k, 4)
-        batch_idx = torch.arange(bs, device=boxes_img.device, dtype=boxes_img.dtype).view(bs, 1).repeat(1, k).view(-1, 1)
+        batch_idx = (
+            torch.arange(bs, device=boxes_img.device, dtype=boxes_img.dtype).view(bs, 1).repeat(1, k).view(-1, 1)
+        )
         rois = torch.cat((batch_idx, roi_boxes), dim=1)  # [bs*k, 5]
         return rois, selected_boxes
 
@@ -885,7 +887,12 @@ class Pose26Refine(Pose26):
         )
 
     def _run_refiner(
-        self, feat0: torch.Tensor, boxes_img: torch.Tensor, coarse_kpts_img: torch.Tensor, scores: torch.Tensor, topk: int
+        self,
+        feat0: torch.Tensor,
+        boxes_img: torch.Tensor,
+        coarse_kpts_img: torch.Tensor,
+        scores: torch.Tensor,
+        topk: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run query-based keypoint refinement on top-scoring anchors."""
         bs, na = scores.shape
@@ -916,7 +923,9 @@ class Pose26Refine(Pose26):
         refined[:, 0, :2] = pelvis
         if self.kpt_shape[0] > 1:
             delta_raw = self.refine_delta(q[:, 1, :])
-            delta = torch.cat((delta_raw[:, 0:1] * box_wh[:, 0:1], F.softplus(delta_raw[:, 1:2]) * box_wh[:, 1:2]), dim=1)
+            delta = torch.cat(
+                (delta_raw[:, 0:1] * box_wh[:, 0:1], F.softplus(delta_raw[:, 1:2]) * box_wh[:, 1:2]), dim=1
+            )
             refined[:, 1, :2] = pelvis + delta
 
         return idx, refined.view(bs, k, self.kpt_shape[0], self.kpt_shape[1])
@@ -969,7 +978,7 @@ class Pose26Refine(Pose26):
 class Pose26MLPRefine(Pose26):
     """YOLO26 Pose head with lightweight implicit MLP keypoint refinement on P3 features."""
 
-    def __init__(self, nc: int = 80, kpt_shape: tuple = (17, 3), reg_max=16, end2end=False, ch: tuple = ()): 
+    def __init__(self, nc: int = 80, kpt_shape: tuple = (17, 3), reg_max=16, end2end=False, ch: tuple = ()):
         """Initialize Pose26MLPRefine head."""
         super().__init__(nc, kpt_shape, reg_max, end2end, ch)
         self.refine_enabled = True
