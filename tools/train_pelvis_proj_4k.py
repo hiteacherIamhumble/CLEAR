@@ -33,7 +33,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--project", type=str, default="runs/pelvis-proj")
     p.add_argument("--name", type=str, default="yolo26x-pelvis-proj-960-e20-b64")
     p.add_argument("--rect", action=argparse.BooleanOptionalAction, default=True, help="Use rectangular batching")
-    p.add_argument("--amp", action=argparse.BooleanOptionalAction, default=True, help="Enable/disable AMP mixed precision")
+    p.add_argument(
+        "--amp", action=argparse.BooleanOptionalAction, default=True, help="Enable/disable AMP mixed precision"
+    )
     p.add_argument("--freeze", type=int, default=0, help="Freeze first N layers")
     p.add_argument("--optimizer", type=str, default="MuSGD", help="Optimizer: MuSGD/SGD/AdamW/... ")
     p.add_argument("--lr0", type=float, default=0.01)

@@ -51,7 +51,7 @@ SUMMARY_JSON="$RESULT_DIR/${EXP_PREFIX}_summary.json"
 
 validate_device() {
   local device="$1"
-  python - <<PY "$device"
+  python - "$device" << PY
 import sys
 import torch
 
@@ -79,7 +79,7 @@ PY
 
 preflight_ckpt() {
   local ckpt="$1"
-  python - <<PY "$ckpt"
+  python - "$ckpt" << PY
 import sys
 from pathlib import Path
 from ultralytics.nn.modules.transformer import P3CrossScaleDeformAttn  # noqa: F401
@@ -96,7 +96,7 @@ PY
 
 extract_locsim_stats() {
   local stats_json="$1"
-  python - <<PY "$stats_json"
+  python - "$stats_json" << PY
 import json, sys
 with open(sys.argv[1], 'r', encoding='utf-8') as f:
     d = json.load(f)
@@ -122,9 +122,9 @@ run_final_eval() {
   local out_log="$LOG_DIR/${EXP_PREFIX}_${tag}_${FINAL_SPLIT}.log"
   mkdir -p "$out_dir"
   POSE26_MLP_REFINE_TOPK_TRAIN="$REFINE_TOPK_TRAIN" \
-  POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
-  POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
-  PYTHONPATH="$ROOT:${PYTHONPATH:-}" python "$LOCSIM_SCRIPT" \
+    POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
+    POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
+    PYTHONPATH="$ROOT:${PYTHONPATH:-}" python "$LOCSIM_SCRIPT" \
     --weights "$ckpt" \
     --data "$LOCSIM_DATA" \
     --split "$FINAL_SPLIT" \
@@ -157,9 +157,9 @@ train_one() {
 
   echo "[INFO] Train mode=${mode} run=${run_name}" >&2
   POSE26_MLP_REFINE_TOPK_TRAIN="$REFINE_TOPK_TRAIN" \
-  POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
-  POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
-  python tools/train_pelvis_proj_4k.py \
+    POSE26_MLP_REFINE_TOPK_EVAL="$REFINE_TOPK_EVAL" \
+    POSE26_MLP_REFINE_HIDDEN="$REFINE_HIDDEN" \
+    python tools/train_pelvis_proj_4k.py \
     --model "$MODEL_STAGE2" \
     --init-weights "$init_weights" \
     --resume "$resume_ckpt" \
@@ -199,8 +199,14 @@ train_one() {
   fi
   local best_ckpt="$weights_dir/best.pt"
   local last_ckpt="$weights_dir/last.pt"
-  [[ -f "$best_ckpt" ]] || { echo "[ERROR] Missing best checkpoint: $best_ckpt" >&2; exit 3; }
-  [[ -f "$last_ckpt" ]] || { echo "[ERROR] Missing last checkpoint: $last_ckpt" >&2; exit 3; }
+  [[ -f "$best_ckpt" ]] || {
+    echo "[ERROR] Missing best checkpoint: $best_ckpt" >&2
+    exit 3
+  }
+  [[ -f "$last_ckpt" ]] || {
+    echo "[ERROR] Missing last checkpoint: $last_ckpt" >&2
+    exit 3
+  }
   preflight_ckpt "$best_ckpt" >&2
   preflight_ckpt "$last_ckpt" >&2
 
@@ -215,23 +221,47 @@ train_one() {
 validate_device "$TRAIN_DEVICE"
 validate_device "$EVAL_DEVICE"
 
-[[ -f "$MODEL_STAGE2" ]] || { echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"; exit 2; }
-[[ -f "$STAGE1_WEIGHTS" ]] || { echo "[ERROR] STAGE1_WEIGHTS not found: $STAGE1_WEIGHTS"; exit 2; }
-[[ -f "$CONT_RESUME_CKPT" ]] || { echo "[ERROR] CONT_RESUME_CKPT not found: $CONT_RESUME_CKPT"; exit 2; }
-[[ -f "$DATA_YAML" ]] || { echo "[ERROR] DATA_YAML not found: $DATA_YAML"; exit 2; }
-[[ -f "$LOCSIM_SCRIPT" ]] || { echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"; exit 2; }
-[[ -f "$LOCSIM_DATA" ]] || { echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"; exit 2; }
+[[ -f "$MODEL_STAGE2" ]] || {
+  echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"
+  exit 2
+}
+[[ -f "$STAGE1_WEIGHTS" ]] || {
+  echo "[ERROR] STAGE1_WEIGHTS not found: $STAGE1_WEIGHTS"
+  exit 2
+}
+[[ -f "$CONT_RESUME_CKPT" ]] || {
+  echo "[ERROR] CONT_RESUME_CKPT not found: $CONT_RESUME_CKPT"
+  exit 2
+}
+[[ -f "$DATA_YAML" ]] || {
+  echo "[ERROR] DATA_YAML not found: $DATA_YAML"
+  exit 2
+}
+[[ -f "$LOCSIM_SCRIPT" ]] || {
+  echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"
+  exit 2
+}
+[[ -f "$LOCSIM_DATA" ]] || {
+  echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"
+  exit 2
+}
 
 ANNOT_DIR="${ANNOT_DIR:-$ROOT/my_database/annotations}"
-[[ -f "$ANNOT_DIR/val.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"; exit 2; }
+[[ -f "$ANNOT_DIR/val.json" ]] || {
+  echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"
+  exit 2
+}
 if [[ "$FINAL_SPLIT" == "test" || "$FINAL_SPLIT" == "challenge" ]]; then
-  [[ -f "$ANNOT_DIR/test.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"; exit 2; }
+  [[ -f "$ANNOT_DIR/test.json" ]] || {
+    echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"
+    exit 2
+  }
 fi
 
 CONT_OUT="$(train_one continue "$RUN_CONT" "$CONT_RESUME_CKPT" "")"
 FRESH_OUT="$(train_one fresh "$RUN_FRESH" "$STAGE1_WEIGHTS" "")"
 
-python - <<PY "$SUMMARY_JSON" "$CONT_OUT" "$FRESH_OUT"
+python - "$SUMMARY_JSON" "$CONT_OUT" "$FRESH_OUT" << PY
 import json, sys
 
 summary_json, cont_blob, fresh_blob = sys.argv[1:]

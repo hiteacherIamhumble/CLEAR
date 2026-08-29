@@ -3,6 +3,7 @@
 Updated: 2026-04-09 (UTC)
 
 This document is a summary of:
+
 1. The task definition and dataset/meta/evaluation setup in this folder.
 2. The current `yolo26x-pose` solution, including code modifications, finetuning recipe, and latest metrics.
 3. Key contents from referenced files/artifacts.
@@ -14,10 +15,12 @@ This document is a summary of:
 ### 1.1 Problem statement
 
 The current pipeline is a **pose-style detection task with 2 keypoints per person**:
+
 - Keypoint 0: `pelvis`
 - Keypoint 1: `pelvis_ground` (ground projection of pelvis)
 
 Each detection outputs:
+
 - `bbox` (person box)
 - `pelvis` keypoint `(x, y, v)`
 - `pelvis_ground` keypoint `(x, y, v)`
@@ -57,26 +60,30 @@ class cx cy w h p_x p_y p_v g_x g_y g_v
 ```
 
 Input size used for training/inference in current runs:
+
 - `imgsz=960`
 
 ### 1.3 Dataset split metadata (train/val/test)
 
 Current folder layout:
+
 - `my_database/images/{train,val,test}`
 - `my_database/labels/{train,val,test}`
 
 Images in `my_database/images/*` are symlinks (example):
+
 - `my_database/images/train/000048.jpg -> /root/autodl-tmp/sskit/database/train/000048.jpg`
 
 Split statistics:
 
 | Split | Images | Label files | Labeled instances (label rows) | Image storage size (real target dirs) |
-|---|---:|---:|---:|---:|
-| train | 42,504 | 42,504 | 668,259 | 59G |
-| val | 6,777 | 6,777 | 109,351 | 9.6G |
-| test | 9,309 | 9,309 | 148,164 | 14G |
+| ----- | -----: | ----------: | -----------------------------: | ------------------------------------: |
+| train | 42,504 |      42,504 |                        668,259 |                                   59G |
+| val   |  6,777 |       6,777 |                        109,351 |                                  9.6G |
+| test  |  9,309 |       9,309 |                        148,164 |                                   14G |
 
 Split roles:
+
 - `train`: optimization/finetuning
 - `val`: checkpoint monitoring and LocSim threshold selection
 - `test`: final report (LocSim + YOLO metrics)
@@ -86,10 +93,12 @@ Split roles:
 The project evaluates both standard YOLO and custom LocSim metrics.
 
 Standard YOLO metrics:
+
 - `precision(B)`, `recall(B)`, `mAP50(B)`, `mAP50-95(B)` for bbox
 - `precision(P)`, `recall(P)`, `mAP50(P)`, `mAP50-95(P)` for keypoints
 
 Custom metrics:
+
 - `precision`, `recall`, `f1` at LocSim=0.5 with selected score threshold
 - `frame_accuracy`
 - `mAP-LocSim` over LocSim IoU-like range (`0.50:0.95`)
@@ -102,9 +111,11 @@ Custom metrics:
 ### 2.1 Base model and adaptation
 
 Base checkpoint:
+
 - `yolo26x-pose.pt`
 
 Adaptation behavior seen in training log:
+
 - `Overriding model.yaml kpt_shape=[17, 3] with kpt_shape=[2, 3]`
 - Pose head line shows 2-keypoint setup:
   - `Pose26 [1, [2, 3], ...]`
@@ -114,6 +125,7 @@ Adaptation behavior seen in training log:
 ### 2.2 How `yolo26x-pose` is modified in code
 
 Modified files (`git status --short`):
+
 - `ultralytics/cfg/default.yaml`
 - `ultralytics/data/dataset.py`
 - `ultralytics/data/utils.py`
@@ -126,14 +138,14 @@ Modified files (`git status --short`):
 
 Key modifications:
 
-1) New runtime switch for out-of-bounds labels
+1. New runtime switch for out-of-bounds labels
 
 ```yaml
 # ultralytics/cfg/default.yaml
 allow_oob_labels: False
 ```
 
-2) Dataset cache/version and verification path carry OOB flag
+2. Dataset cache/version and verification path carry OOB flag
 
 ```python
 # ultralytics/data/dataset.py
@@ -154,7 +166,7 @@ if not allow_oob_keypoints:
     assert kpt_points.min() >= -0.01
 ```
 
-3) Geometry scaling now supports optional no-clipping
+3. Geometry scaling now supports optional no-clipping
 
 ```python
 # ultralytics/utils/ops.py
@@ -173,7 +185,7 @@ if clip:
     coords = clip_coords(coords, img0_shape)
 ```
 
-4) Predict/val paths propagate `allow_oob_labels`
+4. Predict/val paths propagate `allow_oob_labels`
 
 ```python
 # detect/predict.py
@@ -202,6 +214,7 @@ allow_oob = bool(self.data.get("allow_oob_labels", self.data.get("allow_oob_keyp
 ### 2.3 Finetuning procedure currently used
 
 Main training driver:
+
 - `tools/train_pelvis_proj_4k.py`
 
 Key training script contents:
@@ -236,6 +249,7 @@ model.train(task="pose", ..., optimizer="MuSGD", pose=args.pose, kobj=args.kobj,
 ```
 
 Main run artifact:
+
 - `/root/autodl-tmp/ultralytics/runs/pose/runs/pelvis-proj/yolo26x-pelvis-proj-960-e20-b64-pose18.0-kobj2.0-optMuSGD-m0.2-20260407_235150`
 
 `args.yaml` key values from that run:
@@ -284,10 +298,12 @@ Pose: P=0.975 R=0.979 mAP50=0.993 mAP50-95=0.992
 #### B) LocSim evaluation results (val/test)
 
 LocSim eval run:
+
 - `/root/autodl-tmp/ultralytics/runs/pose-bev/locsim_eval_20260408_042737`
 - log: `runs/pelvis-proj/nohup_locsim_20260408_042737.log`
 
 VAL LocSim (from log block):
+
 - precision: `0.9365`
 - recall: `0.9100`
 - f1: `0.9231`
@@ -296,6 +312,7 @@ VAL LocSim (from log block):
 - score_threshold: `0.4912`
 
 TEST LocSim (from log block):
+
 - precision: `0.9427`
 - recall: `0.8700`
 - f1: `0.9049`
@@ -304,6 +321,7 @@ TEST LocSim (from log block):
 - score_threshold: `0.4912`
 
 TEST LOCSIM_BBOX (from log block):
+
 - precision: `0.8713`
 - recall: `0.8100`
 - f1: `0.8395`
@@ -312,6 +330,7 @@ TEST LOCSIM_BBOX (from log block):
 - score_threshold: `0.4104`
 
 Also reported in same test run (YOLO metrics):
+
 - `precision(B)=0.9733`
 - `recall(B)=0.9595`
 - `mAP50(B)=0.9854`
@@ -325,6 +344,7 @@ Also reported in same test run (YOLO metrics):
 ### 2.5 Important artifact caveat
 
 In `locsim_eval_20260408_042737`, these pairs are identical (overwritten with test values):
+
 - `locsim_val_stats.json` == `locsim_test_stats.json`
 - `locsim_bbox_val_stats.json` == `locsim_bbox_test_stats.json`
 
@@ -357,13 +377,7 @@ So for true VAL LocSim values, use the **log text** (`nohup_locsim_20260408_0427
 Example key export structure:
 
 ```python
-{
-  "bbox_xyxy": [...],
-  "score": ...,
-  "class_id": ...,
-  "pelvis": [x, y, v],
-  "pelvis_ground": [x, y, v]
-}
+{"bbox_xyxy": [...], "score": ..., "class_id": ..., "pelvis": [x, y, v], "pelvis_ground": [x, y, v]}
 ```
 
 ### 3.3 Core Ultralytics internal modifications

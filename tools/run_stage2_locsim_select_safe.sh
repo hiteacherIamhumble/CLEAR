@@ -52,7 +52,7 @@ BEST_CKPT_FIXED="$RESULT_DIR/${EXP_PREFIX}_best_locsim.pt"
 
 preflight_ckpt() {
   local ckpt="$1"
-  python - <<PY "$ckpt"
+  python - "$ckpt" << PY
 import sys
 from pathlib import Path
 from ultralytics.nn.modules.transformer import P3CrossScaleDeformAttn  # noqa: F401
@@ -69,7 +69,7 @@ PY
 
 extract_locsim_stats() {
   local stats_json="$1"
-  python - <<PY "$stats_json"
+  python - "$stats_json" << PY
 import json, sys
 p = sys.argv[1]
 with open(p, "r", encoding="utf-8") as f:
@@ -91,7 +91,7 @@ PY
 
 select_metric_value() {
   local stats_json="$1"
-  python - <<PY "$stats_json"
+  python - "$stats_json" << PY
 import json, sys
 with open(sys.argv[1], "r", encoding="utf-8") as f:
     d = json.load(f)
@@ -100,15 +100,30 @@ print(float(stats["AP"]))
 PY
 }
 
-[[ -f "$INIT_WEIGHTS" ]] || { echo "[ERROR] INIT_WEIGHTS not found: $INIT_WEIGHTS"; exit 2; }
-[[ -f "$MODEL_STAGE2" ]] || { echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"; exit 2; }
-[[ -f "$DATA_YAML" ]] || { echo "[ERROR] DATA_YAML not found: $DATA_YAML"; exit 2; }
-[[ -f "$LOCSIM_SCRIPT" ]] || { echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"; exit 2; }
-[[ -f "$LOCSIM_DATA" ]] || { echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"; exit 2; }
+[[ -f "$INIT_WEIGHTS" ]] || {
+  echo "[ERROR] INIT_WEIGHTS not found: $INIT_WEIGHTS"
+  exit 2
+}
+[[ -f "$MODEL_STAGE2" ]] || {
+  echo "[ERROR] MODEL_STAGE2 not found: $MODEL_STAGE2"
+  exit 2
+}
+[[ -f "$DATA_YAML" ]] || {
+  echo "[ERROR] DATA_YAML not found: $DATA_YAML"
+  exit 2
+}
+[[ -f "$LOCSIM_SCRIPT" ]] || {
+  echo "[ERROR] LOCSIM_SCRIPT not found: $LOCSIM_SCRIPT"
+  exit 2
+}
+[[ -f "$LOCSIM_DATA" ]] || {
+  echo "[ERROR] LOCSIM_DATA not found: $LOCSIM_DATA"
+  exit 2
+}
 
 validate_device() {
   local device="$1"
-  python - <<PY "$device"
+  python - "$device" << PY
 import sys
 import torch
 
@@ -138,9 +153,15 @@ validate_device "$TRAIN_DEVICE"
 validate_device "$EVAL_DEVICE"
 
 ANNOT_DIR="${ANNOT_DIR:-$ROOT/my_database/annotations}"
-[[ -f "$ANNOT_DIR/val.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"; exit 2; }
+[[ -f "$ANNOT_DIR/val.json" ]] || {
+  echo "[ERROR] Missing annotation: $ANNOT_DIR/val.json"
+  exit 2
+}
 if [[ "$FINAL_SPLIT" == "test" || "$FINAL_SPLIT" == "challenge" ]]; then
-  [[ -f "$ANNOT_DIR/test.json" ]] || { echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"; exit 2; }
+  [[ -f "$ANNOT_DIR/test.json" ]] || {
+    echo "[ERROR] Missing annotation: $ANNOT_DIR/test.json"
+    exit 2
+  }
 fi
 
 echo "[INFO] Stage2-only train: $RUN2"
@@ -175,7 +196,10 @@ python tools/train_pelvis_proj_4k.py \
 
 RUN_DIR="$RUNS_DIR/$RUN2"
 WEIGHTS_DIR="$RUN_DIR/weights"
-[[ -d "$WEIGHTS_DIR" ]] || { echo "[ERROR] Missing weights dir: $WEIGHTS_DIR"; exit 3; }
+[[ -d "$WEIGHTS_DIR" ]] || {
+  echo "[ERROR] Missing weights dir: $WEIGHTS_DIR"
+  exit 3
+}
 
 BEST_AP="-1"
 BEST_EPOCH=""
@@ -208,17 +232,19 @@ for ckpt in "${EPOCH_CKPTS[@]}"; do
     --save-dir "$sel_dir" > "$sel_log" 2>&1
 
   stats_json="$sel_dir/locsim_${SELECT_SPLIT}_stats.json"
-  [[ -f "$stats_json" ]] || { echo "[ERROR] Missing stats: $stats_json" >&2; exit 5; }
+  [[ -f "$stats_json" ]] || {
+    echo "[ERROR] Missing stats: $stats_json" >&2
+    exit 5
+  }
   ap="$(select_metric_value "$stats_json")"
   echo "[INFO] ${epoch_name} ${SELECT_SPLIT} LocSim AP=${ap}"
 
-  if python - <<PY "$ap" "$BEST_AP"
+  if python - "$ap" "$BEST_AP" << PY; then
 import sys
 cur = float(sys.argv[1])
 best = float(sys.argv[2])
 raise SystemExit(0 if cur > best else 1)
 PY
-  then
     BEST_AP="$ap"
     BEST_EPOCH="$epoch_num"
     BEST_EPOCH_CKPT="$ckpt"
@@ -227,7 +253,10 @@ PY
   fi
 done
 
-[[ -n "$BEST_EPOCH_CKPT" ]] || { echo "[ERROR] Failed to select best epoch checkpoint"; exit 6; }
+[[ -n "$BEST_EPOCH_CKPT" ]] || {
+  echo "[ERROR] Failed to select best epoch checkpoint"
+  exit 6
+}
 cp -f "$BEST_EPOCH_CKPT" "$BEST_CKPT_FIXED"
 echo "[INFO] Best LocSim epoch: $BEST_EPOCH"
 echo "[INFO] Best ${SELECT_SPLIT} LocSim AP: $BEST_AP"
@@ -265,7 +294,7 @@ else
   FINAL_METRICS="{}"
 fi
 
-python - <<PY "$SUMMARY_JSON" "$RUN2" "$INIT_WEIGHTS" "$BEST_CKPT_FIXED" "$BEST_EPOCH" "$BEST_AP" "$LOG_STAGE2_TRAIN" "$BEST_SELECT_DIR" "$BEST_STATS_JSON" "$BEST_SELECT_METRICS" "$FINAL_DIR" "$FINAL_LOG" "$FINAL_METRICS"
+python - "$SUMMARY_JSON" "$RUN2" "$INIT_WEIGHTS" "$BEST_CKPT_FIXED" "$BEST_EPOCH" "$BEST_AP" "$LOG_STAGE2_TRAIN" "$BEST_SELECT_DIR" "$BEST_STATS_JSON" "$BEST_SELECT_METRICS" "$FINAL_DIR" "$FINAL_LOG" "$FINAL_METRICS" << PY
 import json, sys
 (
     out_json,
